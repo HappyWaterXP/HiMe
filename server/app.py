@@ -8,6 +8,7 @@
 - Converts HTTP file uploads to PIL images.
 - Delegates all task logic to ServerTaskManager.
 - Returns a *clean* execution state to client (no internal-only fields).
+uv run python -m uvicorn src.server.app:app --host 0.0.0.0 --port 8000 --reload
 """
 
 from __future__ import annotations

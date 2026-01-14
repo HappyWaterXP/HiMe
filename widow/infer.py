@@ -1,3 +1,16 @@
+"""
+python widow/infer.py \
+    --policy_host 10.11.18.93 \
+    --policy_port 8000 \
+    --task_server_base_url http://10.244.10.152:8000 \
+    --task_server_timeout 1800 \
+    --debug_mode \
+    --pause_on_observer \
+    --pause_on_planner \
+    --task_prompt "The plate on the left has a toy croissant, the plate on the right has a toy mushroom, and there's a toy bread on the table,which is in a bit of a strange spot right now; I feel like it would be better if it were placed together with the croissants;They've all gotten a bit dirty, so please put them into the box for me — I’m going to wash them."
+
+"""
+
 #!/usr/bin/env python3
 from __future__ import annotations
 
@@ -41,6 +54,9 @@ class RobotClientConfig:
     timeout: int = 60
     observer_window_size: int = 8
     human_intervene_for_planner: bool = False
+    debug_mode: bool = False
+    pause_on_observer: bool = False
+    pause_on_planner: bool = False
 
 
 class RobotClient:
@@ -105,6 +121,9 @@ class RobotClient:
             "human_intervene_for_planner": (
                 "true" if self.config.human_intervene_for_planner else "false"
             ),
+            "debug_mode": "true" if self.config.debug_mode else "false",
+            "pause_on_observer": "true" if self.config.pause_on_observer else "false",
+            "pause_on_planner": "true" if self.config.pause_on_planner else "false",
         }
 
         resp = requests.post(url, files=files, data=data, timeout=self.timeout)
@@ -240,6 +259,11 @@ def main():
     parser.add_argument("--observer_window_size", type=int, default=8)
     parser.add_argument("--human_intervene_for_planner", action="store_true")
 
+    # Debug mode
+    parser.add_argument("--debug_mode", action="store_true", help="Enable debug mode for task")
+    parser.add_argument("--pause_on_observer", action="store_true", help="Pause after Observer calls for approval")
+    parser.add_argument("--pause_on_planner", action="store_true", help="Pause after Planner calls for approval")
+
     args = parser.parse_args()
     dt = 1.0 / args.control_hz
 
@@ -279,6 +303,9 @@ def main():
             timeout=args.task_server_timeout,
             observer_window_size=args.observer_window_size,
             human_intervene_for_planner=args.human_intervene_for_planner,
+            debug_mode=args.debug_mode,
+            pause_on_observer=args.pause_on_observer,
+            pause_on_planner=args.pause_on_planner,
         )
     )
     user_client = UserClient(
