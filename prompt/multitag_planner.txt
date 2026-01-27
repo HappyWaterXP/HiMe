@@ -248,7 +248,7 @@ For each turn, your output MUST consist of the following XML blocks:
          - You must follow the recipe to design your plan list. You must directly repeat the 
          pick-and-place if multiple pick action needed. eg. [] reset [] pick xx [] reset [] pick xx
          - Always reset before pick-and-place. One reset, one pick-and-place.
-         - if your previous plan is [current] reset, you can transform it to [done] and move to the next subtask.
+         - Reset has 100% success rate, if your current plan list shows [current] reset, you can always consider it is done and transform it to [done] in your final plan list.
          - OPTIONAL short goal/result description at the end in parentheses.
          - Description in parentheses will be ignored when executed, you must put important information outside the parentheses.
          - Completed subtasks should be marked [done] and MUST NOT be removed from the list.

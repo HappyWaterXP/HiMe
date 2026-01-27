@@ -87,6 +87,10 @@ The subtask MUST start with exactly one of the following patterns:
       target location in the current context.
     - Example: pick up the red cube from left box and place it to right box
 
+3. Reset action:
+    - Before you do the pick-and-place action, always reset first. One reset, one pick-and-place, one reset, one pick-and-place, etc.
+    - Reset is done when in both images, the robot arm is aligned parallel to what appears to be a rail or track. The end effector is open and facing downwards towards the table.
+
 ============================================================
 # OUTPUT FORMAT
 
@@ -107,7 +111,7 @@ Your output MUST consist of ONLY the following XML blocks:
        Must be either:
        - "inspect <location>"
        - "pick up <object> from <source> and place it to <target>"
-
+       - "reset"
        Do NOT include any status markers like [current] or [pending].
        Just the action description.
   -->

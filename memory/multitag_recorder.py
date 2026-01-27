@@ -651,13 +651,28 @@ class MultiTagMemory:
         """
         从 JSON 文件恢复 memory 状态
 
+        支持两种格式：
+        1. 标准格式（save_to_json 保存的）:
+           {
+             "version": "1.0",
+             "next_id": 4,
+             "records": [...]
+           }
+
+        2. 轻量格式（all_light/snapshot_light 保存的）:
+           [
+             {"id": 1, "tags": [...], ...},
+             {"id": 2, "tags": [...], ...},
+             ...
+           ]
+
         完整重建：
         1. 恢复所有记录
         2. 重新生成 text_embedding（每条记录）
         3. 重新生成 tag_embeddings_cache（所有唯一 tags）
         4. 重建 tag_ref_count（统计每个 tag 的引用次数）
         5. 重建 tag_to_record_ids 倒排索引
-        6. 恢复 next_id
+        6. 恢复 next_id（如果有）
 
         Args:
             filepath: JSON 文件路径
@@ -679,11 +694,22 @@ class MultiTagMemory:
         # 创建新实例
         memory = cls(encoder=encoder)
 
-        # 恢复 next_id
-        memory._next_id = data.get("next_id", 1)
-
-        records_data = data.get("records", [])
-        print(f"[Memory] Resuming from {filepath}: {len(records_data)} records")
+        # ✅ 兼容两种格式
+        if isinstance(data, list):
+            # 轻量格式：直接是记录数组
+            records_data = data
+            # 从记录中推断 next_id（最大 id + 1）
+            if records_data:
+                max_id = max(rec.get("id", 0) for rec in records_data)
+                memory._next_id = max_id + 1
+            print(f"[Memory] Resuming from {filepath}: {len(records_data)} records (lightweight format)")
+        elif isinstance(data, dict):
+            # 标准格式：带 version 和 next_id
+            records_data = data.get("records", [])
+            memory._next_id = data.get("next_id", 1)
+            print(f"[Memory] Resuming from {filepath}: {len(records_data)} records (standard format)")
+        else:
+            raise ValueError(f"Invalid JSON format: expected list or dict, got {type(data)}")
 
         # Step 1: 收集所有唯一的 tags
         all_tags: set[str] = set()

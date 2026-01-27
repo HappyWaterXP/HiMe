@@ -195,6 +195,10 @@ MUST start with exactly one of the following patterns:
       and refine it after inspection. For example:
        [pending] pick up the red cube and place it in the corresponding box (inspect to find the box with cube)
 
+3. Reset action:
+    - Before you do the pick-and-place action, always reset first. One reset, one pick-and-place, one reset, one pick-and-place, etc.
+    - Reset is done when the robot arm is in the home pose.
+
 ============================================================
 # REQUIRED OUTPUT FORMAT FOR EACH TURN
 
@@ -229,8 +233,15 @@ For each turn, your output MUST consist of the following XML blocks:
          - MUST contain the finalized plan, one subtask per line.
          - Each line must start with [done] / [current] / [pending].
          - Each subtask must begin with "inspect ..." or
-           "pick up ... and place ...".
+           "pick up ... and place ..." or "reset".
+         - Before a pick-and-place action, always reset first.
+         - Reset is done when in both images, the robot arm is aligned parallel to what appears to be a rail or track. The end effector is open and facing downwards towards the table.
+         - You must follow the recipe to design your plan list. You must directly repeat the 
+         pick-and-place if multiple pick action needed. eg. [] reset [] pick xx [] reset [] pick xx
+         - Always reset before pick-and-place. One reset, one pick-and-place.
+         - Reset has 100% success rate, if your current plan list shows [current] reset, you can always consider it is done and transform it to [done] in your final plan list.
          - OPTIONAL short goal/result description at the end in parentheses.
+         - Description in parentheses will be ignored when executed, you must put important information outside the parentheses.
          - Completed subtasks should be marked [done] and MUST NOT be removed from the list.
          - Must have a [current] task unless the task is done.
   -->

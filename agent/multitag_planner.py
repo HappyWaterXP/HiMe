@@ -212,7 +212,7 @@ class PlannerAgent:
                             )
 
                             # Display text/description content
-                            # if value and data_type != 'image': # todu
+                            # if value and data_type != 'image': # todo
                             if value:
                                 value_str = str(value)
                                 text_preview = value_str[:200]

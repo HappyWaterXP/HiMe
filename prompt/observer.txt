@@ -16,7 +16,7 @@ Judgment Criteria:
 
   - Inspect the recipe: done only if you fully recongnize the content of the paper on the table in the Wrist Camera View(LEFT HALF). You must can repeat the words on the paper.
 
-  - Pick & Place: done when the object has been successfully released at the destination
+  - Pick & Place: done when the object has been successfully released at the destination or you observe that the robot arm is above a box and see its blck background.
 
   - Reset: done when the robot arm is in the home pose.
     - the robot arm home pose is: in both images, the arm is aligned parallel to what appears to be a rail or track. The end effector (or gripper) is open and facing downwards towards the table.
