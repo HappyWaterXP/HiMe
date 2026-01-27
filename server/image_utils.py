@@ -8,7 +8,7 @@ Currently includes:
 from __future__ import annotations
 
 import os
-from typing import Optional
+from typing import Optional, Union, List
 from PIL import Image
 from dataclasses import dataclass
 
@@ -17,14 +17,14 @@ class RobotImageInput:
     """
     Canonical input structure for a robot image observation.
 
-    - waist_image: optional waist camera image (PIL)
-    - image: required main camera image (PIL)
+    - waist_image: optional waist camera image(s) (PIL or List[PIL])
+    - image: required main camera image(s) (PIL or List[PIL])
 
-    Server will always merge these (if both present) into a single "combined"
-    image, and only that combined image is stored and passed to observer/planner.
+    If lists are provided, they represent a temporal sequence (buffer).
     """
-    waist_image: Optional[Image.Image]
-    image: Image.Image
+    # 允许单张图片（兼容 create_task）或 图片列表（兼容 step buffer）
+    waist_image: Union[Image.Image, List[Image.Image], None]
+    image: Union[Image.Image, List[Image.Image]]
 
 
 def combine_two_images_horizontally(

@@ -56,7 +56,7 @@ class ObserverAgent:
         max_tokens: int = 256,
     ) -> ObserverResult:
         user_text = build_observer_user_message(plan_list)
-
+        # import pdb; pdb.set_trace()
         raw_xml = self.vlm.call_once(
             system_prompt=self.system_prompt,
             user_text=user_text,

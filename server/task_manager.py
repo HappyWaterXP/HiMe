@@ -9,26 +9,25 @@ Responsibilities:
   - Call Planner to refine plan_list (with or without new user input).
 - Hide index-based subtask logic: current subtask is always derived from `plan_list`
   using `extract_current_subtask(plan_list)`.
+- Log all interactions in round-based format.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Optional
 from PIL import Image
-import threading
 import time
 
 from .schema import (
     TaskRuntimeState,
     TaskConfig,
-    TaskStateEnum,
-    PendingApproval,
 )
 from .task_state import create_initial_task_state, save_pil_to_dir
 from .image_utils import combine_two_pil_horizontally
+from .round_logger import RoundLogger
 
 from src.agent.multitag_planner import PlannerAgent
+        # noqa
 from src.agent.observer import ObserverAgent
 from src.extractor import extract_current_subtask, is_plan_done
 
@@ -39,6 +38,7 @@ from src.infer.loop import (
 )
 
 from .image_utils import RobotImageInput
+
 
 class ServerTaskManager:
     """
@@ -85,11 +85,17 @@ class ServerTaskManager:
         - Call Planner (first round) to obtain initial plan_list + summary.
         - Extract current subtask via extract_current_subtask(plan_list).
         """
+        # import pdb; pdb.set_trace()
+        print(f"[TaskManager] Create task: config={config}")
         assert self.planner_agent is not None, "PlannerAgent not set"
         assert self.observer_agent is not None, "ObserverAgent not set"
 
         cfg = config or TaskConfig()
         state = create_initial_task_state(global_instruction, cfg)
+
+        # Initialize round logger
+        state.round_logger = RoundLogger(state.logs_dir)
+        state.round_logger.start_round()  # Start first round
 
         # Save initial combined image
         combined_path = self._save_robot_input_as_combined_image(
@@ -103,47 +109,82 @@ class ServerTaskManager:
         user_instruction = build_planner_user_instruction(
             base_instruction=state.global_instruction,
             current_plan_list="",
-            user_new_input=None,
             is_first_round=True,
         )
 
+        # Determine max_inner_rounds based on memory usage
+        from src.server.ablation_logic import get_ablation_config
+        ablation = get_ablation_config()
+        max_rounds = 2 if ablation.use_memory else 1
+
         res = self.planner_agent.run_refine(
             image_paths=planner_images,
-            initial_plan_list="",
+            initial_plan_list=None,
             user_instruction=user_instruction,
             max_tokens=4096,
-            max_inner_rounds=10,
+            max_inner_rounds=max_rounds,
             do_reset=True,
-            print_full_interactions_each_round=True,
-            log_interactions_json_dir=None,
+            print_full_interactions_each_round=False,
+            log_interactions_json_dir=state.logs_dir + "/interactions",
             use_cli_prompt_for_memory_view=False,
             decide_view_memory=None,
-            log_memory_json_dir=None,
+            log_memory_json_dir=state.logs_dir + "/memory",
             drop_images_in_json=True,
         )
 
         state.plan_list = (res.plan_text or "").strip()
         state.summary = (res.summary or "").strip()
 
-        # Decide if whole plan is already done
-        if is_plan_done(state.plan_list):
+        # Log the initial planner interaction
+        if state.round_logger:
+            state.round_logger.add_planner_interaction(
+                image_paths=planner_images,
+                user_instruction=user_instruction,
+                initial_plan_list="",
+                result_plan_list=state.plan_list,
+                result_summary=state.summary,
+                raw_output=res.raw_xml or "",
+                memory_operations=[op.__dict__ for op in res.memory_operations] if res.memory_operations else [],
+            )
+            # End first round and start observing
+            state.round_logger.end_round()
+
+        print(f"[TaskManager] First planner done")
+
+        # Apply planner result to state (ablation-aware)
+        from src.server.ablation_logic import (
+            apply_planner_result_to_state,
+            should_task_be_done,
+            extract_current_subtask_description,
+            ensure_ablation_fields
+        )
+
+        # Ensure ablation-specific fields exist on state
+        ensure_ablation_fields(state, ablation)
+
+        # Apply result based on ablation mode
+        apply_planner_result_to_state(state, res, ablation)
+
+        # Check if task is already done
+        if should_task_be_done(state, ablation):
             state.is_done = True
-            state.state = TaskStateEnum.IDLE
             state.current_subtask_description = None
+            print(f"[TaskManager] Task already complete")
         else:
-            subtask_desc = extract_current_subtask(state.plan_list)
+            subtask_desc = extract_current_subtask_description(state, ablation)
             if subtask_desc:
                 state.current_subtask_description = subtask_desc
                 # current subtask image segment starts at the last appended index
                 state.current_subtask_start_idx = len(state.image_paths) - 1 if state.image_paths else 0
-                state.state = TaskStateEnum.OBSERVING
+                print(f"[TaskManager] Task initialized: subtask='{subtask_desc}', start_idx={state.current_subtask_start_idx}")
             else:
-                # Plan has no recognizable subtask; treat as done
+                # No recognizable subtask; treat as done
                 state.is_done = True
-                state.state = TaskStateEnum.IDLE
                 state.current_subtask_description = None
+                print(f"[TaskManager] No subtask found, marking as done")
 
         self.tasks[state.task_id] = state
+        print(f"[TaskManager] Task {state.task_id} created and stored")
         return state
 
     # ---------- Public: robot step + maybe refine ----------
@@ -154,106 +195,129 @@ class ServerTaskManager:
         robot_input: RobotImageInput,
     ) -> TaskRuntimeState:
         """
-        Handle one step of robot observation:
+        Handle robot observation (supports both single frame and image buffer):
 
-        - Combine waist + main into one "combined" PIL image.
-        - Save combined to images_dir, append path to image_paths.
-        - If task is OBSERVING:
-            - Run Observer on global image_paths with sliding window.
-            - If Observer returns done (and no pending user instruction):
-                - Run planner refine (without user_new_instruction).
-        - If task is not OBSERVING:
-            - Only append image; do not run observer/planner.
+        1. Normalize input (single image -> list).
+        2. Iterate through all images in the buffer:
+           - Combine waist + main.
+           - Save to disk and update state.image_paths.
+        3. Run Observer/Planner logic ONCE based on the latest state.
         """
+        from src.server.ablation_logic import get_ablation_config
+        # 确保能创建一个临时的单帧 RobotImageInput 用于复用保存逻辑
+        from src.server.image_utils import RobotImageInput as SingleFrameInput 
+
         assert self.planner_agent is not None
         assert self.observer_agent is not None
 
+        ablation = get_ablation_config()
         state = self._get_task(task_id)
+        
+        # --- 1. Normalize Inputs to Lists ---
+        # 无论由 create_task 传入单图，还是 step 传入 buffer，统一转为 list
+        main_imgs = robot_input.image if isinstance(robot_input.image, list) else [robot_input.image]
+        
+        waist_imgs = robot_input.waist_image
+        if waist_imgs is None:
+            waist_imgs = [None] * len(main_imgs)
+        elif not isinstance(waist_imgs, list):
+            waist_imgs = [waist_imgs] # 单图转列表
+            
+        # 简单的长度对齐检查
+        if len(main_imgs) != len(waist_imgs):
+            print(f"[TaskManager] Warning: Mismatch in image buffer lengths. Main: {len(main_imgs)}, Waist: {len(waist_imgs)}")
+            # 取最短长度，防止 crash
+            min_len = min(len(main_imgs), len(waist_imgs))
+            main_imgs = main_imgs[:min_len]
+            waist_imgs = waist_imgs[:min_len]
 
-        # If the task is already completed, just store the image (for logging)
+        print(f"\n[TaskManager] add_step: task_id={task_id}, is_done={state.is_done}, "
+              f"buffer_size={len(main_imgs)}, total_history={len(state.image_paths)}")
+
+        # --- 2. Process Buffer (Save all images) ---
+        # 如果任务已完成，我们只保存图片用于日志，不运行逻辑
+        prefix = "step_done" if state.is_done else "step"
+        
+        for i, (m_img, w_img) in enumerate(zip(main_imgs, waist_imgs)):
+            # 构造一个临时的单帧 Input，复用现有的保存逻辑
+            # 注意：这里假设 _save_robot_input_as_combined_image 内部处理了 state.image_paths 的 append
+            single_input = SingleFrameInput(waist_image=w_img, image=m_img)
+            
+            self._save_robot_input_as_combined_image(
+                state=state,
+                robot_input=single_input,
+                prefix=prefix,
+            )
+
         if state.is_done:
-            self._save_robot_input_as_combined_image(
-                state=state,
-                robot_input=robot_input,
-                prefix="step_done",
-            )
+            print(f"[TaskManager] Task already done, images stored.")
             return state
 
-        # If not in OBSERVING state, don't run Observer; just store image.
-        if state.state != TaskStateEnum.OBSERVING:
-            self._save_robot_input_as_combined_image(
-                state=state,
-                robot_input=robot_input,
-                prefix="step_passive",
-            )
+        # --- 3. Check ablation mode ---
+        if not ablation.use_observer:
+            # NO OBSERVER MODE: Directly call planner
+            print(f"[TaskManager] No observer mode - calling planner directly")
+            self._run_planner_refine_without_observer(state, ablation)
             return state
 
-        # 1. Save combined image as a new step
-        combined_path = self._save_robot_input_as_combined_image(
-            state=state,
-            robot_input=robot_input,
-            prefix="step",
-        )
-        if not combined_path:
-            # Should not happen; we require at least main image
-            return state
+        # --- 4. STANDARD MODE: Run observer ---
+        # 此时 state.image_paths 已经包含了刚才 buffer 里的所有新图片
+        print(f"[TaskManager] Buffer saved, now running observer")
 
-        # 2. Decide whether to skip observer result (if we have a pending user instruction)
-        skip_observer_result = state.pending_user_instruction is not None
-
-        # 3. Run observer on all combined images with window
-        # all_imgs = state.image_paths[:]  # in chronological order
-        # if not all_imgs:
-        #     return state
-
+        # Get all images from current subtask start to end
         start = state.current_subtask_start_idx
         end = len(state.image_paths)
-        segment = state.image_paths[start:end] if end > start else []
+        full_segment = state.image_paths[start:end] if end > start else []
 
-        status, seen_imgs, _last_xml = observer_loop_with_scheduler_window(
-            observer=self.observer_agent,
+        # For observer, only use latest window_size images
+        w = state.config.observer_window_size
+        if len(full_segment) > w:
+            observer_images = full_segment[-w:]
+            print(f"[TaskManager] Full segment: {len(full_segment)}, giving observer latest {len(observer_images)}")
+        else:
+            observer_images = full_segment
+
+        if not observer_images:
+            print("[TaskManager] Warning: No images for observer.")
+            return state
+
+        print(f"[TaskManager] Running observer on {len(observer_images)} images")
+
+        # Run observer agent
+        r = self.observer_agent.run(
+            image_paths=observer_images,
             plan_list=state.plan_list,
-            sampled_imgs=segment,
-            window_size_w=state.config.observer_window_size,
             max_tokens=512,
         )
+        status = r.status.strip().lower() if r.status else "not_done"
 
-        # Debug mode: pause for approval after observer
-        if state.config.debug_mode and state.config.pause_on_observer:
-            state.pending_approval = PendingApproval(
-                agent_type="observer",
-                timestamp=time.time(),
-                raw_output=_last_xml,
-                parsed_output={"status": status},
-                input_context={
-                    "image_paths": segment,
-                    "plan_list": state.plan_list
-                }
+        # Log observer interaction
+        if state.round_logger:
+            if not state.round_logger.current_round:
+                state.round_logger.start_round()
+            state.round_logger.add_observer_interaction(
+                image_paths=observer_images,
+                plan_list=state.plan_list,
+                status=status,
+                raw_output=r.raw_xml or "",
+                timestamp=None,
             )
-            state.state = TaskStateEnum.PENDING_OBSERVER_APPROVAL
 
-            event = threading.Event()
-            state.approval_event = event
+        print(f"[TaskManager] Observer returned status='{status}'")
 
-            print(f"[Debug] Observer output pending approval (task_id={task_id})")
-            event.wait()  # Block until user approves
-
-            # Get approved result (possibly modified)
-            status = state.approved_result.get("status", status)
-            state.pending_approval = None
-            state.approval_event = None
-            state.approved_result = {}
-
-        if not skip_observer_result:
-            if status == "done":
-                # Current subtask is completed; run planner refine without new user input
-                self._run_planner_refine_without_user_instruction(state)
-            else:
-                # Not done; keep observing
-                pass
-        else:
-            # If user instruction is pending, ignore this observer status
-            pass
+        # --- 5. Decisions ---
+        
+        # If observer says done
+        if status == "done":
+            print(f"[TaskManager] Observer says done, calling planner refine")
+            self._run_planner_refine_without_user_instruction(state, ablation)
+        
+        # Stuck detection (check total steps in current subtask)
+        # 注意：这里 full_segment 包含了刚刚加入的一整个 buffer，所以如果 buffer 很大，
+        # 可能会立即触发 stuck 逻辑，这是符合预期的（动作太多了还没做完）
+        elif len(full_segment) > 50:
+            print(f"[TaskManager] Task maybe stuck (segment len {len(full_segment)} > 10), calling planner refine")
+            self._run_planner_refine_without_user_instruction(state, ablation)
 
         return state
 
@@ -267,22 +331,29 @@ class ServerTaskManager:
         """
         Apply an additional user instruction to refine the current plan_list.
 
-        - Does not accept a new image.
+        - Directly replaces global_instruction with the new instruction.
         - Planner will see:
-           - global_instruction
+           - new global_instruction (replaced)
            - existing plan_list
-           - this new user_new_instruction
            - images belonging to the current subtask segment.
+
+        Note: This method now allows refinement even if the task is marked as done,
+        enabling users to extend or modify completed tasks.
         """
         assert self.planner_agent is not None
 
         state = self._get_task(task_id)
-        if state.is_done:
-            return state
 
-        state.pending_user_instruction = user_new_instruction.strip()
+        # Allow refinement even if task is done - user may want to add more work
+        # If task was done, we need to reactivate it
+        if state.is_done:
+            print(f"[TaskManager] Task was done, reactivating for user instruction")
+            state.is_done = False
+
+        # ✅ Directly replace global_instruction
+        state.global_instruction = user_new_instruction.strip()
+
         self._run_planner_refine_with_user_instruction(state)
-        state.pending_user_instruction = None
         return state
 
     # ---------- Internal: image handling ----------
@@ -331,110 +402,209 @@ class ServerTaskManager:
     def _run_planner_refine_without_user_instruction(
         self,
         state: TaskRuntimeState,
+        ablation: Optional[Any] = None,
     ) -> None:
         """
         Planner refine when observer says current subtask is done.
 
-        Logic:
-        - Use images from current_subtask_start_idx to the latest as the segment.
-        - sample up to 8 images from this segment.
-        - Build planner user_instruction (no user_new_input).
-        - Call planner.run_refine.
-        - Update plan_list, summary.
-        - Derive new current_subtask_description via extract_current_subtask.
-        - If plan is done or no subtask found -> mark task as done + IDLE.
-        - Otherwise:
-            - set new current_subtask_description
-            - set current_subtask_start_idx = len(image_paths)
-            - set state to OBSERVING.
+        Now compatible with both:
+        - plan mode: refine/extend plan_list and derive current subtask via extract_current_subtask(plan_list)
+        - no_plan mode: planner outputs next subtask directly (ablation-aware state update)
         """
+        from src.server.ablation_logic import (
+            get_ablation_config,
+            apply_planner_result_to_state,
+            should_task_be_done,
+            extract_current_subtask_description,
+        )
+
+        if ablation is None:
+            ablation = get_ablation_config()
+
         if state.is_done:
             return
 
-        state.state = TaskStateEnum.PLANNING
-
+        # ---- collect segment images ----
         start = state.current_subtask_start_idx
         end = len(state.image_paths)
         segment = state.image_paths[start:end] if end > start else []
-        planner_images = sample_up_to_n_evenly(segment, 8) if segment else []
 
-        user_instruction = build_planner_user_instruction(
-            base_instruction=state.global_instruction,
-            current_plan_list=state.plan_list,
-            user_new_input=None,
-            is_first_round=False,
-        )
+        # no_plan mode typically needs fewer images (optional; tune as you like)
+        is_no_plan = (ablation.planner_mode == "single_subtask")
+        max_n = 1 if is_no_plan else 8
+        planner_images = sample_up_to_n_evenly(segment, max_n) if segment else []
 
+        # ---- build planner input ----
+        if is_no_plan:
+            # In no_plan mode: use raw global instruction (no "update this plan" wrapper)
+            user_instruction = state.global_instruction
+            initial_plan_list = state.plan_list  # can be "", kept for compatibility
+            max_rounds = 1  # usually no memory + single turn
+        else:
+            user_instruction = build_planner_user_instruction(
+                base_instruction=state.global_instruction,
+                current_plan_list=state.plan_list,
+                is_first_round=False,
+            )
+            initial_plan_list = state.plan_list
+            max_rounds = 2 if getattr(ablation, "use_memory", False) else 1
+
+        # ---- call planner ----
         res = self.planner_agent.run_refine(
             image_paths=planner_images,
-            initial_plan_list=state.plan_list,
+            initial_plan_list=initial_plan_list,
             user_instruction=user_instruction,
             max_tokens=4096,
-            max_inner_rounds=10,
+            max_inner_rounds=max_rounds,
             do_reset=True,
-            print_full_interactions_each_round=True,
-            log_interactions_json_dir=None,
+            print_full_interactions_each_round=False,
+            log_interactions_json_dir=state.logs_dir + "/interactions",
             use_cli_prompt_for_memory_view=False,
             decide_view_memory=None,
-            log_memory_json_dir=None,
+            log_memory_json_dir=state.logs_dir + "/memory",
             drop_images_in_json=True,
         )
 
-        # Debug mode: pause for approval after planner
-        if state.config.debug_mode and state.config.pause_on_planner:
-            state.pending_approval = PendingApproval(
-                agent_type="planner",
-                timestamp=time.time(),
-                raw_output=res.raw_xml,
-                parsed_output={
-                    "summary": res.summary,
-                    "plan_text": res.plan_text,
-                    "memory_operations": [op.__dict__ for op in res.memory_operations]
-                },
-                input_context={
-                    "image_paths": planner_images,
-                    "user_instruction": user_instruction,
-                    "current_plan_list": state.plan_list
-                }
+        # ---- logging ----
+        if state.round_logger:
+            state.round_logger.add_planner_interaction(
+                image_paths=planner_images,
+                user_instruction=user_instruction,
+                initial_plan_list=initial_plan_list or "",
+                result_plan_list=res.plan_text or "",
+                result_summary=res.summary or "",
+                raw_output=res.raw_xml or "",
+                memory_operations=[op.__dict__ for op in res.memory_operations] if res.memory_operations else [],
             )
-            state.state = TaskStateEnum.PENDING_PLANNER_APPROVAL
+            state.round_logger.end_round()
 
-            event = threading.Event()
-            state.approval_event = event
+        # ---- update state (mode-specific) ----
+        if is_no_plan:
+            # Let ablation logic decide how to store outputs (could be current_subtask_description, etc.)
+            apply_planner_result_to_state(state, res, ablation)
 
-            print(f"[Debug] Planner output pending approval (task_id={state.task_id})")
-            event.wait()  # Block until user approves
+            if should_task_be_done(state, ablation):
+                state.is_done = True
+                state.current_subtask_description = None
+                return
 
-            # Get approved result (possibly modified)
-            approved = state.approved_result
-            plan_text = approved.get("plan_text", res.plan_text)
-            summary = approved.get("summary", res.summary)
-            state.pending_approval = None
-            state.approval_event = None
-            state.approved_result = {}
-        else:
-            plan_text = res.plan_text
-            summary = res.summary
+            new_sub_desc = extract_current_subtask_description(state, ablation)
+            if not new_sub_desc:
+                state.is_done = True
+                state.current_subtask_description = None
+                return
 
-        state.plan_list = (plan_text or "").strip()
-        state.summary = (summary or "").strip()
+            state.current_subtask_description = new_sub_desc
+            state.current_subtask_start_idx = len(state.image_paths)
+            return
+
+        # ---- plan mode (original behavior) ----
+        state.plan_list = (res.plan_text or "").strip()
+        state.summary = (res.summary or "").strip()
 
         if is_plan_done(state.plan_list):
             state.is_done = True
-            state.state = TaskStateEnum.IDLE
             state.current_subtask_description = None
             return
 
         new_sub_desc = extract_current_subtask(state.plan_list)
         if not new_sub_desc:
             state.is_done = True
-            state.state = TaskStateEnum.IDLE
             state.current_subtask_description = None
             return
 
         state.current_subtask_description = new_sub_desc
         state.current_subtask_start_idx = len(state.image_paths)
-        state.state = TaskStateEnum.OBSERVING
+
+    # ---------- Internal: planner refine without observer (no_plan mode) ----------
+
+    def _run_planner_refine_without_observer(
+        self,
+        state: TaskRuntimeState,
+        ablation: Any,
+    ) -> None:
+        """
+        Planner refine for "no_plan" mode (periodic trigger, no observer).
+
+        This is called every time a new image arrives (no observer filtering).
+
+        Logic:
+        - Use images from current_subtask_start_idx to the latest.
+        - Call planner to get single next subtask.
+        - Update state with new subtask and completion status.
+        - max_inner_rounds=1 (no memory, single turn).
+
+        In no_plan mode, always use the original global_instruction directly,
+        without any plan list update prefixes.
+        """
+        if state.is_done:
+            return
+
+        start = state.current_subtask_start_idx
+        end = len(state.image_paths)
+        segment = state.image_paths[start:end] if end > start else []
+        planner_images = sample_up_to_n_evenly(segment, 8) if segment else []
+
+        # In no_plan mode: always use the original instruction directly
+        # No plan list prefixes, no "update this plan" instructions
+        user_instruction = state.global_instruction
+
+        # For no_plan mode: max_inner_rounds=1 (no memory, single turn)
+        max_rounds = 2
+
+        res = self.planner_agent.run_refine(
+            image_paths=planner_images,
+            initial_plan_list=state.plan_list,
+            user_instruction=user_instruction,
+            max_tokens=4096,
+            max_inner_rounds=max_rounds,
+            do_reset=True,
+            print_full_interactions_each_round=False,
+            log_interactions_json_dir=state.logs_dir + "/interactions",
+            use_cli_prompt_for_memory_view=False,
+            decide_view_memory=None,
+            log_memory_json_dir=state.logs_dir + "/memory",
+            drop_images_in_json=True,
+        )
+
+        # Log planner interaction
+        if state.round_logger:
+            if not state.round_logger.current_round:
+                state.round_logger.start_round()
+            state.round_logger.add_planner_interaction(
+                image_paths=planner_images,
+                user_instruction=user_instruction,
+                initial_plan_list=state.plan_list,
+                result_plan_list=res.plan_text or "",
+                result_summary=res.summary or "",
+                raw_output=res.raw_xml or "",
+                memory_operations=[],  # No memory in no_plan mode
+            )
+
+        # For no_plan mode, use ablation logic to extract subtask
+        from src.server.ablation_logic import apply_planner_result_to_state, should_task_be_done
+
+        apply_planner_result_to_state(state, res, ablation)
+
+        # Check if task is complete
+        if should_task_be_done(state, ablation):
+            state.is_done = True
+            new_sub_desc = None
+            state.current_subtask_description = None
+            print(f"[TaskManager] Task marked as complete")
+        else:
+            # Extract current subtask from state (set by apply_planner_result_to_state)
+            from src.server.ablation_logic import extract_current_subtask_description
+            new_sub_desc = extract_current_subtask_description(state, ablation)
+            state.current_subtask_description = new_sub_desc
+            print(f"[TaskManager] Next subtask: {new_sub_desc}")
+
+        # End round after planner completes
+        if state.round_logger:
+            state.round_logger.end_round()
+
+        state.current_subtask_description = new_sub_desc
+        state.current_subtask_start_idx = len(state.image_paths)
 
     # ---------- Internal: planner refine with user instruction ----------
 
@@ -446,92 +616,72 @@ class ServerTaskManager:
         Planner refine when a new user instruction is provided.
 
         - Uses images from current_subtask_start_idx onward as context.
-        - Builds planner user_instruction with user_new_input filled in.
+        - Builds planner user_instruction with updated global_instruction.
         - Planner is allowed to significantly change the plan_list structure.
         - After refine:
             - If plan is done or no subtask: mark done + IDLE.
             - Else: extract current subtask from new plan_list and continue OBSERVING.
         """
-        state.state = TaskStateEnum.PLANNING
+        from src.server.ablation_logic import get_ablation_config
+
+        ablation = get_ablation_config()
 
         start = state.current_subtask_start_idx
         end = len(state.image_paths)
         segment = state.image_paths[start:end] if end > start else []
         planner_images = sample_up_to_n_evenly(segment, 8) if segment else []
 
-        ui = (state.pending_user_instruction or "").strip()
-
+        # Note: global_instruction has already been updated to the new instruction
         user_instruction = build_planner_user_instruction(
             base_instruction=state.global_instruction,
             current_plan_list=state.plan_list,
-            user_new_input=ui,
             is_first_round=False,
         )
+
+        # Determine max_inner_rounds based on memory usage
+        max_rounds = 2 if ablation.use_memory else 1
 
         res = self.planner_agent.run_refine(
             image_paths=planner_images,
             initial_plan_list=state.plan_list,
             user_instruction=user_instruction,
             max_tokens=4096,
-            max_inner_rounds=10,
+            max_inner_rounds=max_rounds,
             do_reset=True,
-            print_full_interactions_each_round=True,
-            log_interactions_json_dir=None,
+            print_full_interactions_each_round=False,
+            log_interactions_json_dir=state.logs_dir + "/interactions",
             use_cli_prompt_for_memory_view=False,
             decide_view_memory=None,
-            log_memory_json_dir=None,
+            log_memory_json_dir=state.logs_dir + "/memory",
             drop_images_in_json=True,
         )
 
-        # Debug mode: pause for approval after planner
-        if state.config.debug_mode and state.config.pause_on_planner:
-            state.pending_approval = PendingApproval(
-                agent_type="planner",
-                timestamp=time.time(),
-                raw_output=res.raw_xml,
-                parsed_output={
-                    "summary": res.summary,
-                    "plan_text": res.plan_text,
-                    "memory_operations": [op.__dict__ for op in res.memory_operations]
-                },
-                input_context={
-                    "image_paths": planner_images,
-                    "user_instruction": user_instruction,
-                    "current_plan_list": state.plan_list
-                }
+        # Log planner interaction
+        if state.round_logger:
+            state.round_logger.add_planner_interaction(
+                image_paths=planner_images,
+                user_instruction=user_instruction,
+                initial_plan_list=state.plan_list,
+                result_plan_list=res.plan_text or "",
+                result_summary=res.summary or "",
+                raw_output=res.raw_xml or "",
+                memory_operations=[op.__dict__ for op in res.memory_operations] if res.memory_operations else [],
             )
-            state.state = TaskStateEnum.PENDING_PLANNER_APPROVAL
 
-            event = threading.Event()
-            state.approval_event = event
-
-            print(f"[Debug] Planner output pending approval (task_id={state.task_id})")
-            event.wait()  # Block until user approves
-
-            # Get approved result (possibly modified)
-            approved = state.approved_result
-            plan_text = approved.get("plan_text", res.plan_text)
-            summary = approved.get("summary", res.summary)
-            state.pending_approval = None
-            state.approval_event = None
-            state.approved_result = {}
-        else:
-            plan_text = res.plan_text
-            summary = res.summary
+        plan_text = res.plan_text
+        summary = res.summary
 
         state.plan_list = (plan_text or "").strip()
         state.summary = (summary or "").strip()
 
         if is_plan_done(state.plan_list):
             state.is_done = True
-            state.state = TaskStateEnum.IDLE
             state.current_subtask_description = None
             return
 
         new_sub_desc = extract_current_subtask(state.plan_list)
         if not new_sub_desc:
             state.is_done = True
-            state.state = TaskStateEnum.IDLE
             state.current_subtask_description = None
             return
 
@@ -539,7 +689,6 @@ class ServerTaskManager:
         # "the current subtask" from the fresh plan_list.
         state.current_subtask_description = new_sub_desc
         state.current_subtask_start_idx = len(state.image_paths)
-        state.state = TaskStateEnum.OBSERVING
 
     # ---------- Internal: task lookup ----------
 

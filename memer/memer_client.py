@@ -79,30 +79,25 @@ class RobotClient:
         """POST /tasks: create task on server with initial images + instruction."""
         url = f"{self.base_url}/tasks"
 
-        main_pil = self._to_pil(initial_image)
-        main_bytes = self._pil_to_png_bytes(main_pil)
+        if initial_waist_image is None:
+            raise ValueError("initial_waist_image is required by the task server")
+
+        head_pil = self._to_pil(initial_image)
+        head_bytes = self._pil_to_png_bytes(head_pil)
+
+        wrist_pil = self._to_pil(initial_waist_image)
+        wrist_bytes = self._pil_to_png_bytes(wrist_pil)
 
         files = {
-            "initial_image": (
-                "initial_image.png",
-                io.BytesIO(main_bytes),
-                "image/png",
-            )
+            "initial_image": ("initial_image.png", io.BytesIO(head_bytes), "image/png"),
+            "initial_waist_image": ("initial_waist_image.png", io.BytesIO(wrist_bytes), "image/png"),
         }
 
-        if initial_waist_image is not None:
-            waist_pil = self._to_pil(initial_waist_image)
-            waist_bytes = self._pil_to_png_bytes(waist_pil)
-            files["initial_waist_image"] = (
-                "initial_waist_image.png",
-                io.BytesIO(waist_bytes),
-                "image/png",
-            )
-
+        # form-data values as strings is the most compatible
         data = {
             "global_instruction": global_instruction,
-            "observer_window_size": self.config.observer_window_size,
-            "human_intervene_for_planner": self.config.human_intervene_for_planner,
+            "observer_window_size": str(self.config.observer_window_size),
+            "human_intervene_for_planner": "true" if self.config.human_intervene_for_planner else "false",
         }
 
         resp = requests.post(url, files=files, data=data, timeout=self.timeout)
@@ -117,42 +112,32 @@ class RobotClient:
     ) -> Dict[str, Any]:
         """
         POST /tasks/{task_id}/step: upload a SEQUENCE of observation images.
-        Modified to accept lists of images instead of single images.
+        Server expects repeated keys:
+          - "image" (head)
+          - "waist_image" (wrist)
         """
         url = f"{self.base_url}/tasks/{task_id}/step"
 
-        # We use a list of tuples for 'files' to send multiple files with the same key (or distinct keys)
-        # Assuming the server accepts 'image' as a list or multiple fields.
-        # Standard requests format for multiple files: [('field_name', (filename, bytes, content_type)), ...]
         files = []
 
-        # 1. Process Head Images
+        # 1) Head images
         if not images:
             raise ValueError("send_step called with empty image list")
-
         for idx, img in enumerate(images):
             pil_img = self._to_pil(img)
             img_bytes = self._pil_to_png_bytes(pil_img)
-            # We use the key "image" repeatedly. Most server frameworks (FastAPI/Flask) parse this as a list.
-            files.append((
-                "image",
-                (f"step_image_{idx}.png", io.BytesIO(img_bytes), "image/png")
-            ))
+            files.append(("image", (f"step_head_{idx}.png", io.BytesIO(img_bytes), "image/png")))
 
-        # 2. Process Waist Images
-        if waist_images:
-            if len(waist_images) != len(images):
-                print(f"[Warn] Waist image count ({len(waist_images)}) != Head image count ({len(images)})")
+        # 2) Wrist images (required)
+        if not waist_images:
+            raise ValueError("send_step requires waist_images (non-empty)")
+        if len(waist_images) != len(images):
+            print(f"[Warn] Waist image count ({len(waist_images)}) != Head image count ({len(images)})")
+        for idx, img in enumerate(waist_images):
+            pil_img = self._to_pil(img)
+            img_bytes = self._pil_to_png_bytes(pil_img)
+            files.append(("waist_image", (f"step_wrist_{idx}.png", io.BytesIO(img_bytes), "image/png")))
 
-            for idx, img in enumerate(waist_images):
-                pil_img = self._to_pil(img)
-                img_bytes = self._pil_to_png_bytes(pil_img)
-                files.append((
-                    "waist_image",
-                    (f"waist_step_image_{idx}.png", io.BytesIO(img_bytes), "image/png")
-                ))
-
-        # Send request
         resp = requests.post(url, files=files, timeout=self.timeout)
         resp.raise_for_status()
         return resp.json()
@@ -468,8 +453,10 @@ def main():
                         # Execute actions
                         executed = 0
                         for a in actions:
-                            if stop_flag.is_set(): break
-                            if executed >= args.actions_per_policy_call: break
+                            if stop_flag.is_set():
+                                break
+                            if executed >= args.actions_per_policy_call:
+                                break
 
                             step_start = time.perf_counter()
                             try:
@@ -496,14 +483,15 @@ def main():
                             total_actions_executed += 1
                             elapsed = time.perf_counter() - step_start
                             sleep_t = dt - elapsed
-                            if sleep_t > 0: time.sleep(sleep_t)
+                            if sleep_t > 0:
+                                time.sleep(sleep_t)
             else:
                 # Task is done, robot idle
                 if not last_reported_done_state:
                     print("\n[Main] ✓ Task completed. Robot idle, waiting for new instructions...")
                     last_reported_done_state = True
 
-                # If idle, we still need to capture one image to show the observer the current state
+                # If idle, capture one image to show observer current state
                 head_img = head_cam.capture_image()
                 wrist_img = wrist_cam.capture_image()
                 if head_img is not None and wrist_img is not None:
@@ -511,13 +499,12 @@ def main():
                     wrist_img_buffer.append(wrist_img)
 
             # 6.2 Communicate with task server (Send Buffer)
-            # If buffer is empty (e.g. camera errors), skip
             if not head_img_buffer:
-                if task_is_done: time.sleep(1.0)
+                if task_is_done:
+                    time.sleep(1.0)
                 continue
 
             try:
-                # Send the entire sequence of images captured during policy execution
                 step_resp = robot_client.send_step(
                     task_id=task_id,
                     images=head_img_buffer,
@@ -553,13 +540,15 @@ def main():
         stop_flag.set()
         try:
             robot.go_to_sleep()
-        except Exception: pass
+        except Exception:
+            pass
         robot.disconnect()
         head_cam.disconnect()
         wrist_cam.disconnect()
         try:
             user_thread.join(timeout=2.0)
-        except Exception: pass
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

@@ -12,7 +12,7 @@ import os
 import time
 from PIL import Image
 
-from .schema import TaskRuntimeState, TaskConfig, make_task_dirs, TaskStateEnum
+from .schema import TaskRuntimeState, TaskConfig, make_task_dirs
 
 
 def save_pil_to_dir(images_dir: str, pil_img: Image.Image, prefix: str) -> str:
@@ -46,5 +46,4 @@ def create_initial_task_state(
         images_dir=dirs["images_dir"],
         logs_dir=dirs["logs_dir"],
         config=config,
-        state=TaskStateEnum.PLANNING,
     )

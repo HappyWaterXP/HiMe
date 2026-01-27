@@ -74,11 +74,16 @@ class PlannerAgent:
     - Turn 2+: 发送查询结果（文本 + 检索到的图片编码）
     """
 
-    def __init__(self, vlm: PlannerVLM, memory: Optional[MultiTagMemory] = None) -> None:
+    def __init__(
+        self,
+        vlm: PlannerVLM,
+        memory: Optional[MultiTagMemory] = None,
+        prompt_name: str = "multitag_planner"
+    ) -> None:
         self.vlm = vlm
         self.memory = memory
 
-        self.system_prompt: str = load_prompt("multitag_planner")
+        self.system_prompt: str = load_prompt(prompt_name)
         self.messages: List[Dict[str, Any]] = [
             {"role": "system", "content": self.system_prompt}
         ]
@@ -86,7 +91,7 @@ class PlannerAgent:
         self.plan_list: str = ""
         self.last_query_results_text: str = ""
         self.last_query_image_paths: List[str] = []
-        
+
         # ✅ 当前 refine 会话的原始输入图片路径列表
         self.current_input_image_paths: List[str] = []
 
@@ -155,12 +160,18 @@ class PlannerAgent:
         1. CREATE/UPDATE/DELETE: Return success/failure messages
         2. QUERY: Return complete record information (tags + text), collect image paths
         3. Image paths are saved to self.last_query_image_paths for encoding in step()
+        4. QUERY 去重：在一次 _apply_memory_operations 调用中，跨多次 QUERY
+           对 record id 和 image_path 进行去重。
         """
         if self.memory is None:
             return ""
 
         result_lines: List[str] = []
         query_image_paths: List[str] = []
+
+        # 跨整个 operations 列表去重（跨多个 QUERY）
+        seen_record_ids: set = set()
+        seen_image_paths: set = set()
 
         for op in operations:
             t = (op.type or "").upper().strip()
@@ -184,6 +195,12 @@ class PlannerAgent:
                         result_lines.append("  (No matching records found)")
                     else:
                         for rec in records:
+                            # 跨 QUERY 对 record ID 去重：
+                            # 若此记录之前已经展示过，则这次不再重复输出。
+                            if rec.id in seen_record_ids:
+                                continue
+                            seen_record_ids.add(rec.id)
+
                             score = scores.get(rec.id, 0.0)
                             data_type = rec.data.get("type")
                             value = rec.data.get("value")
@@ -195,15 +212,20 @@ class PlannerAgent:
                             )
 
                             # Display text/description content
+                            # if value and data_type != 'image': # todu
                             if value:
-                                text_preview = str(value)[:200]
-                                if len(str(value)) > 200:
+                                value_str = str(value)
+                                text_preview = value_str[:200]
+                                if len(value_str) > 200:
                                     text_preview += "..."
                                 result_lines.append(f"    Content: {text_preview}")
 
-                            # If has image, collect path (will be encoded later)
+                            # If has image, collect path（跨 QUERY 对 image_path 去重）
                             if data_type == "image" and rec.image_path:
-                                query_image_paths.append(rec.image_path)
+                                img_path_str = str(rec.image_path)
+                                if img_path_str not in seen_image_paths:
+                                    seen_image_paths.add(img_path_str)
+                                    query_image_paths.append(rec.image_path)
                                 result_lines.append(
                                     f"    [Image: {Path(rec.image_path).name}]"
                                 )
@@ -269,26 +291,41 @@ class PlannerAgent:
 
             # --- UPDATE ---
             elif t == "UPDATE":
-                rec_id = self._safe_parse_rec_id(op.id)
+                # op.id 可能是 int 或 str；这里强制转 str，避免 _safe_parse_rec_id 里 .strip() 报错
+                rec_id = self._safe_parse_rec_id(str(op.id) if op.id is not None else None)
                 if rec_id is None:
                     result_lines.append(f"\n❌ UPDATE failed: Invalid record ID '{op.id}'")
                     continue
 
                 try:
-                    tags_to_use = op.tags if op.tags else ([op.obj_name] if op.obj_name else None)
+                    # 只传“确实要更新”的字段；未提供则保持原样
+                    update_kwargs = {"rec_id": rec_id}
 
-                    # Resolve image indices to real paths
-                    resolved_paths = self._resolve_image_paths(op.image_path)
+                    # text：提供才更新
+                    if op.text is not None:
+                        update_kwargs["text"] = op.text
 
-                    # UPDATE only uses first image (if multiple)
-                    final_image_path = resolved_paths[0] if resolved_paths else None
+                    # image_path：提供才更新；且解析成功才更新（避免误覆盖）
+                    if op.image_path is not None:
+                        resolved_paths = self._resolve_image_paths(op.image_path)
+                        final_image_path = resolved_paths[0] if resolved_paths else None
+                        if final_image_path is not None:
+                            update_kwargs["image_path"] = final_image_path
 
-                    updated_rec = self.memory.update(
-                        rec_id=rec_id,
-                        tags=tags_to_use,
-                        text=op.text,
-                        image_path=final_image_path,
-                    )
+                    # tags：None/[] 都维持原 tags；只有非空才更新
+                    if op.tags is not None:
+                        # normalize
+                        if isinstance(op.tags, (list, tuple, set)):
+                            normalized = [str(t).strip() for t in op.tags if str(t).strip()]
+                        else:
+                            s = str(op.tags).strip()
+                            normalized = [s] if s else []
+
+                        if normalized:  # 只有非空才更新
+                            update_kwargs["tags"] = normalized
+                        # 否则不传 tags，维持原值
+
+                    updated_rec = self.memory.update(**update_kwargs)
 
                     if updated_rec:
                         tags_str = ", ".join(updated_rec.tags) if updated_rec.tags else "N/A"
@@ -297,6 +334,7 @@ class PlannerAgent:
                         )
                     else:
                         result_lines.append(f"\n❌ UPDATE failed: Record ID={rec_id} not found")
+
                 except Exception as e:
                     result_lines.append(f"\n❌ UPDATE failed for ID={rec_id}: {str(e)}")
                     print(f"[Memory] UPDATE error: {e}")
@@ -318,8 +356,10 @@ class PlannerAgent:
                     result_lines.append(f"\n❌ DELETE failed for ID={rec_id}: {str(e)}")
                     print(f"[Memory] DELETE error: {e}")
 
-        # Save queried image paths for encoding in step()
+        # 跨所有 QUERY 去重后的图片路径
         self.last_query_image_paths = query_image_paths
+
+        # del_id = self.memory.prune_to_max_records(8)
 
         return "\n".join(result_lines).strip()
 
@@ -333,29 +373,46 @@ class PlannerAgent:
     ) -> str:
         """
         构建 Turn 1 的 User Prompt
-        
+
         包含：完整任务描述 + 当前计划 + 原始图片说明
+
+        根据 system prompt 的内容决定是否包含 memory 相关的提示
         """
         prompt_parts = ["=== TURN 1 ===\n"]
-        
+
         prompt_parts.append("USER INSTRUCTION:")
         prompt_parts.append(instruction)
-        
+
         prompt_parts.append("\nCURRENT PLAN:")
         if plan_list and plan_list.strip():
             prompt_parts.append(plan_list)
         else:
             prompt_parts.append("(No existing plan)")
-        
+
         if image_count > 0:
             prompt_parts.append(f"\nINPUT IMAGES: {image_count} image(s) provided below, numbered 1 to {image_count}")
-            prompt_parts.append('💡 When creating/updating memory with images, use: image_path="1" or image_path="2,3"')
+
+            # Check if memory is enabled by examining system prompt
+            if "MEMORY DISABLED" not in self.system_prompt:
+                prompt_parts.append('💡 When creating/updating memory with images, use: image_path="1" or image_path="2,3"')
         else:
             prompt_parts.append("\nINPUT IMAGES: None")
-        
+
         prompt_parts.append("\n📋 REQUIRED OUTPUT FORMAT:")
-        prompt_parts.append("You must respond in XML format with <summary>, <memory_operations>, and <plan_list> sections.")
-        
+
+        # Determine output format based on system prompt
+        if "MEMORY DISABLED" in self.system_prompt:
+            # No memory mode
+            if "<subtask>" in self.system_prompt and "<is_complete>" in self.system_prompt:
+                # No plan mode (single subtask output)
+                prompt_parts.append("You must respond in XML format with <summary>, <subtask>, and <is_complete> sections.")
+            else:
+                # No memory but still plan list mode
+                prompt_parts.append("You must respond in XML format with <summary> and <plan_list> sections.")
+        else:
+            # Full memory mode
+            prompt_parts.append("You must respond in XML format with <summary>, <memory_operations>, and <plan_list> sections.")
+
         return "\n".join(prompt_parts)
 
     def _build_user_prompt_turn_n(
@@ -365,24 +422,41 @@ class PlannerAgent:
     ) -> str:
         """
         构建 Turn 2+ 的 User Prompt
-        
+
         包含：上一轮的查询结果（文本 + 图片会在后面附加）
+
+        如果 memory 被禁用，则不应该有 Turn 2+（但为了兼容性保留此方法）
         """
         prompt_parts = [f"=== TURN {turn_num} ===\n"]
-        
-        if query_results_text:
-            prompt_parts.append("=== MEMORY QUERY RESULTS ===")
-            prompt_parts.append(query_results_text)
-            prompt_parts.append("\n📌 Note: Retrieved images (if any) are shown below this text.")
+
+        # Check if memory is enabled
+        if "MEMORY DISABLED" in self.system_prompt:
+            # This should not happen in no-memory mode, but handle gracefully
+            prompt_parts.append("=== SINGLE TURN MODE ===")
+            prompt_parts.append("Memory is disabled. This is an unexpected second turn.")
         else:
-            prompt_parts.append("=== NO MEMORY QUERIES PERFORMED ===")
-            prompt_parts.append("Previous operations completed without queries.")
-        
-        prompt_parts.append("\n📋 NEXT STEPS:")
-        prompt_parts.append("Based on the query results above, continue refining your plan and performing necessary memory operations.")
+            if query_results_text:
+                prompt_parts.append("=== MEMORY QUERY RESULTS ===")
+                prompt_parts.append(query_results_text)
+                prompt_parts.append("\n📌 Note: Retrieved images (if any) are shown below this text.")
+            else:
+                prompt_parts.append("=== NO MEMORY QUERIES PERFORMED ===")
+                prompt_parts.append("Previous operations completed without queries.")
+
+            prompt_parts.append("\n📋 NEXT STEPS:")
+            prompt_parts.append("Based on the query results above, continue refining your plan and performing necessary memory operations.")
+
         prompt_parts.append("\n📋 REQUIRED OUTPUT FORMAT:")
-        prompt_parts.append("You must respond in XML format with <summary>, <memory_operations>, and <plan_list> sections.")
-        
+
+        # Determine output format based on system prompt
+        if "MEMORY DISABLED" in self.system_prompt:
+            if "<subtask>" in self.system_prompt and "<is_complete>" in self.system_prompt:
+                prompt_parts.append("You must respond in XML format with <summary>, <subtask>, and <is_complete> sections.")
+            else:
+                prompt_parts.append("You must respond in XML format with <summary> and <plan_list> sections.")
+        else:
+            prompt_parts.append("You must respond in XML format with <summary>, <memory_operations>, and <plan_list> sections.")
+
         return "\n".join(prompt_parts)
 
     # ---------- 一轮 step ----------
@@ -632,7 +706,7 @@ class PlannerAgent:
         - 每轮询问是否查看 memory（显示不含 embedding 的 all_light），并可选保存为 JSON
         - 可选自动 reset
         """
-        
+        # import pdb; pdb.set_trace()
         last_result: Optional[PlannerResult] = None
 
         # 建议：每次新的 refine 会话前重置，避免历史状态干扰
@@ -682,6 +756,8 @@ class PlannerAgent:
 
             # 每轮结束：询问是否查看 memory（不包含 embedding 的 all）
             view_memory = False
+            if turn_num == 2:
+                view_memory = True
             if decide_view_memory is not None:
                 try:
                     view_memory = bool(decide_view_memory(turn_num))

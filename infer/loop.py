@@ -2,6 +2,7 @@
 import os
 import glob
 import pathlib
+import time
 from typing import Dict, Any, Optional, List, Tuple
 import openai
 
@@ -52,12 +53,39 @@ def stride_sample(paths: List[str], k: int) -> List[str]:
 
 
 def sample_up_to_n_evenly(paths: List[str], n: int) -> List[str]:
-    if len(paths) <= n:
+    length = len(paths)
+    if length <= n:
         return paths
     if n <= 1:
-        return [paths[0]]
-    step = (len(paths) - 1) / (n - 1)
-    return [paths[round(i * step)] for i in range(n)]
+        # 只保留首元素
+        return [paths[-1]]
+
+    # 必须保留首尾
+    result = [paths[0]]
+    # 中间还需要取多少个
+    middle_count = n - 2
+
+    if middle_count <= 0:
+        # 只保留首尾中的一个（此时 n==1 已在上面处理，这里理论上不会进）
+        return [paths[0], paths[-1]][:n]
+
+    # 在 (0, length-1) 之间均匀选择 middle_count 个中间索引
+    start = 1
+    end = length - 2  # 最后一个索引留给 paths[-1]
+    if end < start or middle_count == 0:
+        # 没有足够的中间元素，直接补上最后一个
+        result.append(paths[-1])
+        return result
+
+    step = (end - start + 1) / (middle_count + 1)
+    for i in range(1, middle_count + 1):
+        idx = round(start + (i - 1) * step)
+        # 双重保护，避免越界
+        idx = max(start, min(end, idx))
+        result.append(paths[idx])
+
+    result.append(paths[-1])
+    return result
 
 
 # =============== Observer 调度（窗口在调度层实现） ===============
@@ -67,41 +95,53 @@ def observer_loop_with_scheduler_window(
     sampled_imgs: List[str],
     window_size_w: int,
     max_tokens: int = 512,
-) -> Tuple[str, List[str], str]:
+) -> Tuple[str, List[str], str, List[Dict[str, Any]]]:
     """
     Run the Observer with a growing window then a fixed-size sliding window.
     Only when Observer returns 'done' for 3 consecutive calls do we treat it as truly done.
 
     Returns:
-        (final_status, seen_image_paths, last_raw_xml)
+        (final_status, seen_image_paths, last_raw_xml, all_observer_calls)
         - final_status: "done" or "not_done"
         - seen_image_paths: list of image paths that have been fed to Observer so far
         - last_raw_xml: the latest raw XML (if observer provides it), else ""
+        - all_observer_calls: list of all Observer calls with their results
     """
     n = len(sampled_imgs)
     if n == 0:
         print("⚠️ 本轮没有可用图片。")
-        return "not_done", [], ""
+        return "not_done", [], "", []
 
     w = max(1, int(window_size_w))
     seen: List[str] = []
     final_status = "not_done"
     last_raw_xml = ""
+    all_observer_calls: List[Dict[str, Any]] = []
 
     # Observer 连续 done 计数器
     consecutive_done_obs = 0
-    REQUIRED_CONSECUTIVE_DONE = 2  # 如需可配置，可将其做为函数参数
+    REQUIRED_CONSECUTIVE_DONE = 1  # 如需可配置，可将其做为函数参数
 
     # 处理一次 Observer 返回并更新计数
-    def handle_observer_result(r) -> bool:
+    def handle_observer_result(r, batch: List[str]) -> bool:
         nonlocal last_raw_xml, consecutive_done_obs
         status_str = str(getattr(r, "status", "")).strip().lower()
+        raw_xml = getattr(r, "raw_xml", "") or ""
+
         print(f"status: {status_str}")
-        if getattr(r, "raw_xml", None):
+        if raw_xml:
             print("--- raw_xml ---")
-            print(r.raw_xml)
+            print(raw_xml)
             print("---------------")
-            last_raw_xml = r.raw_xml
+            last_raw_xml = raw_xml
+
+        # Record this Observer call
+        all_observer_calls.append({
+            "image_paths": batch.copy(),
+            "status": status_str,
+            "raw_output": raw_xml,
+            "timestamp": time.time(),
+        })
 
         if status_str == "done":
             consecutive_done_obs += 1
@@ -129,9 +169,9 @@ def observer_loop_with_scheduler_window(
             if p not in seen:
                 seen.append(p)
 
-        if handle_observer_result(r):
+        if handle_observer_result(r, batch):
             final_status = "done"
-            return final_status, seen, last_raw_xml
+            return final_status, seen, last_raw_xml, all_observer_calls
 
     # 阶段 2：固定长度 w 的滑动窗口
     if n > w:
@@ -149,84 +189,11 @@ def observer_loop_with_scheduler_window(
                 if p not in seen:
                     seen.append(p)
 
-            if handle_observer_result(r):
+            if handle_observer_result(r, batch):
                 final_status = "done"
                 break
 
-    return final_status, seen, last_raw_xml
-
-
-# def observer_loop_with_scheduler_window(
-#     observer: ObserverAgent,
-#     plan_list: str,
-#     sampled_imgs: List[str],
-#     window_size_w: int,
-#     max_tokens: int = 512,
-# ) -> Tuple[str, List[str], str]:
-#     n = len(sampled_imgs)
-#     if n == 0:
-#         print("⚠️ 本轮没有可用图片。")
-#         return "not_done", [], ""
-
-#     w = max(1, int(window_size_w))
-#     seen: List[str] = []
-#     final_status = "not_done"
-#     last_raw_xml = ""
-
-#     # 阶段 1：从 1 增长到 min(n, w)
-#     grow_limit = min(n, w)
-#     for size in range(1, grow_limit + 1):
-#         batch = sampled_imgs[:size]
-#         print(f"[Observer] Growing window size={size}, frames=({pathlib.Path(batch[0]).name} ... {pathlib.Path(batch[-1]).name})")
-#         r = observer.run(
-#             image_paths=batch,
-#             plan_list=plan_list,
-#             max_tokens=max_tokens,
-#         )
-#         status_str = str(getattr(r, "status", "")).strip().lower()
-#         print(f"status: {status_str}")
-#         if getattr(r, "raw_xml", None):
-#             print("--- raw_xml ---")
-#             print(r.raw_xml)
-#             print("---------------")
-#             last_raw_xml = r.raw_xml
-
-#         for p in batch:
-#             if p not in seen:
-#                 seen.append(p)
-
-#         if status_str == "done":
-#             final_status = "done"
-#             return final_status, seen, last_raw_xml
-
-#     # 阶段 2：固定长度 w 的滑动窗口
-#     if n > w:
-#         for start in range(1, n - w + 1):
-#             batch = sampled_imgs[start:start + w]
-#             first, last = pathlib.Path(batch[0]).name, pathlib.Path(batch[-1]).name
-#             print(f"[Observer] Sliding window [{start}:{start+w}) frames=({first} ... {last})")
-#             r = observer.run(
-#                 image_paths=batch,
-#                 plan_list=plan_list,
-#                 max_tokens=max_tokens,
-#             )
-#             status_str = str(getattr(r, "status", "")).strip().lower()
-#             print(f"status: {status_str}")
-#             if getattr(r, "raw_xml", None):
-#                 print("--- raw_xml ---")
-#                 print(r.raw_xml)
-#                 print("---------------")
-#                 last_raw_xml = r.raw_xml
-
-#             for p in batch:
-#                 if p not in seen:
-#                     seen.append(p)
-
-#             if status_str == "done":
-#                 final_status = "done"
-#                 break
-
-#     return final_status, seen, last_raw_xml
+    return final_status, seen, last_raw_xml, all_observer_calls
 
 
 def ask_nonempty(prompt: str) -> str:
@@ -240,37 +207,38 @@ def ask_nonempty(prompt: str) -> str:
 # =============== 英文前缀（严谨简洁） ===============
 
 PLANNER_PREFIX_EN = (
-    "Your current plan list represents the active task. "
-    "Based on the user’s new input, adjust the plan list by adding or modifying items as needed. "
-    "You must not completely change or replace its overall content. "
-    "Here is the user’s new input:\n"
+    "Your current plan list represents the latest plan you have made."
+    "Based on the new input, update this plan list by adding, modifying, or marking items as completed as needed."
+    "You must preserve previously completed tasks to reflect the full workflow, and your new plan must be an update of the previous plan, even when a new task arrives"
 )
 
 def build_planner_user_instruction(
     base_instruction: str,
     current_plan_list: str,
-    user_new_input: Optional[str],
     is_first_round: bool,
 ) -> str:
     """
-    - 首轮：直接使用 base_instruction（不加英文前缀，不附加 plan list）
-    - 非首轮：前缀 + 当前 plan list（有清晰分隔）+ 用户新输入（若留空沿用 base_instruction）
+    构建 Planner 的用户指令
+
+    - 每次调用都包含 base_instruction（即当前的 global_instruction）
+    - 首轮：只有 base_instruction
+    - 非首轮：base_instruction + 前缀 + 当前计划
+
+    注意：不再需要 user_new_input 参数，因为新的用户指令会直接替换 global_instruction
     """
     if is_first_round:
+        # 首轮：只传 global instruction
         return base_instruction
 
-    # 若用户留空：沿用 base_instruction 作为“新输入”
-    # effective_new_input = (user_new_input or base_instruction).strip()
-    effective_new_input = (user_new_input or "").strip()
-
+    # 非首轮：global instruction + 前缀 + 当前计划
     parts: List[str] = []
+    parts.append(base_instruction)
+    parts.append("\n")
     parts.append(PLANNER_PREFIX_EN)
-    parts.append("----- Current Plan List -----\n")
+    parts.append("\n----- Current Plan List -----")
     parts.append((current_plan_list or "").strip())
-    parts.append("\n----- User New Input -----\n")
-    parts.append(effective_new_input)
 
-    return "\n".join(parts).strip()
+    return "\n".join(parts)
 
 
 def main():
@@ -305,7 +273,6 @@ def main():
     first_user_instruction = build_planner_user_instruction(
         base_instruction=global_instruction,
         current_plan_list="",
-        user_new_input=None,
         is_first_round=True,
     )
 
@@ -372,10 +339,10 @@ def main():
         else:
             window_size_w = 8
 
-        # 本轮用户可能提供的新输入（留空沿用）
+        # 本轮用户可能提供的新输入（留空则沿用）
         maybe_new_instr = input("本轮是否更新 user instruction？留空则沿用默认: ").strip()
         if maybe_new_instr:
-            global_instruction = maybe_new_instr  # 更新默认
+            global_instruction = maybe_new_instr  # 直接替换 global_instruction
 
         # 采样图片
         all_imgs = natural_sorted_images(folder)
@@ -394,11 +361,10 @@ def main():
         )
         print(f"Observer 最终状态: {status}")
 
-        # Planner user_instruction 构造：前缀 + 当前 plan list + 用户新输入（或沿用）
+        # Planner user_instruction 构造：使用当前的 global_instruction + 前缀 + 当前 plan list
         user_instruction_for_planner = build_planner_user_instruction(
             base_instruction=global_instruction,
             current_plan_list=current_plan_list,
-            user_new_input=maybe_new_instr if maybe_new_instr else None,
             is_first_round=False,
         )
 

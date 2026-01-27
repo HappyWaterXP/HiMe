@@ -229,7 +229,7 @@ def parse_planner_output(xml_text: str) -> Dict[str, Any]:
 
 # ===================== 新增：PlanList 辅助提取 =====================
 
-_CURRENT_MARKER_RE = re.compile(r"^\s*\[current\]\s*(.+)$", flags=re.IGNORECASE)
+_CURRENT_MARKER_RE = re.compile(r"\[current\]", flags=re.IGNORECASE)
 
 def _strip_parentheses_note(s: str) -> str:
     """
@@ -242,31 +242,69 @@ def _strip_parentheses_note(s: str) -> str:
     s_no_paren = re.sub(r"\s*\([^()]*\)", "", s)
     return s_no_paren.strip()
 
+def _strip_step_prefix(s: str) -> str:
+    """
+    去除类似 "Step 1:", "step 2:", "Step-3:" 等前缀。
+    支持的格式：
+      - "Step 1: do something" -> "do something"
+      - "step-2: action" -> "action"
+      - "步骤1：" -> ""
+    """
+    # 匹配 "step" (大小写不敏感) + 数字/符号 + 冒号
+    s = re.sub(r"^\s*step[\s\-]*\d+\s*[:：]\s*", "", s, flags=re.IGNORECASE)
+    # 匹配中文 "步骤" + 数字 + 冒号
+    s = re.sub(r"^\s*步骤\s*\d+\s*[:：]\s*", "", s)
+    return s.strip()
+
 def normalize_current_line(line: str) -> str:
     """
-    - 去除开头的 [current]
-    - 移除两端空白
-    - 去除所有 () 内附注
+    清洗包含 [current] 的任务行，返回纯任务内容。
+
+    处理步骤：
+    1. 去除 [current] 标记（可能在行的任何位置）
+    2. 去除 [done], [pending] 等其他状态标记
+    3. 去除 "Step 1:", "step 2:" 等前缀
+    4. 去除圆括号 () 及其内容
+    5. 去除两端空白
+
+    示例：
+      "Step 1: Pick up object [current]" -> "Pick up object"
+      "[current] Step 2: Place in box (carefully)" -> "Place in box"
+      "step 3: inspect left box [current] (check contents)" -> "inspect left box"
     """
-    m = _CURRENT_MARKER_RE.match(line)
-    if m:
-        core = m.group(1)
-    else:
-        core = line
-    core = core.strip()
+    # 1. 去除所有状态标记 [current], [done], [pending]
+    core = re.sub(r"\[(current|done|pending)\]", "", line, flags=re.IGNORECASE)
+
+    # 2. 去除 Step 前缀
+    core = _strip_step_prefix(core)
+
+    # 3. 去除圆括号内容
     core = _strip_parentheses_note(core)
-    return core
+
+    # 4. 去除两端空白
+    return core.strip()
 
 def extract_current_subtask(plan_text: str) -> Optional[str]:
     """
-    从 plan_list 文本中提取 [current] 标记的子任务，返回“已清洗的纯任务名”（无 () 附注）。
+    从 plan_list 文本中提取包含 [current] 标记的子任务。
+
+    特点：
+    - [current] 可以在行的任何位置（开头、中间、结尾）
+    - 自动去除 "Step 1:", "step 2:" 等前缀
+    - 自动去除圆括号 () 及其内容
+    - 返回清洗后的纯任务内容
+
     若找不到则返回 None。
+
+    示例：
+      输入: "Step 1: Pick up object [done]\nStep 2: Place in box [current] (carefully)\nStep 3: Verify [pending]"
+      输出: "Place in box"
     """
     if not plan_text:
         return None
     lines = [ln.strip() for ln in plan_text.splitlines() if ln.strip()]
     for ln in lines:
-        if _CURRENT_MARKER_RE.match(ln):
+        if _CURRENT_MARKER_RE.search(ln):
             return normalize_current_line(ln)
     return None
 
@@ -275,9 +313,9 @@ def extract_all_tasks_status(plan_text: str) -> List[Tuple[str, bool, bool]]:
     解析每行任务，返回三元组列表：
       (task_text_clean, is_done, is_current)
     - 使用启发式匹配：
-        - is_current: 行以 [current] 开头（大小写不敏感）
-        - is_done: 包含 '[done]'（大小写不敏感）或 末尾 '#done' 或 ' - done' 之类提示
-    - task_text_clean: 去除 [current]、去除 () 附注及 done 标记后的纯任务名
+        - is_current: 行包含 [current]（大小写不敏感，可在任意位置）
+        - is_done: 包含 '[done]'（大小写不敏感）
+    - task_text_clean: 去除所有状态标记、Step 前缀、() 附注后的纯任务名
     """
     results: List[Tuple[str, bool, bool]] = []
     if not plan_text:
@@ -285,13 +323,11 @@ def extract_all_tasks_status(plan_text: str) -> List[Tuple[str, bool, bool]]:
 
     lines = [ln.strip() for ln in plan_text.splitlines() if ln.strip()]
     for ln in lines:
-        is_current = bool(_CURRENT_MARKER_RE.match(ln))
-        # 先去除 [current] 后再判断 done
+        is_current = bool(_CURRENT_MARKER_RE.search(ln))
+        is_done = bool(re.search(r"\[done\]", ln, flags=re.IGNORECASE))
+
+        # 清洗任务内容
         core = normalize_current_line(ln)
-        # done 标记（可按你的实际格式扩展）
-        is_done = bool(re.search(r"\[done\]|\bdone\b|#done", ln, flags=re.IGNORECASE))
-        # 再对 core 做一次清洗，移除可能又残留的 done 提示词
-        core = re.sub(r"\[done\]|#done|\bdone\b", "", core, flags=re.IGNORECASE).strip()
         if core:
             results.append((core, is_done, is_current))
     return results

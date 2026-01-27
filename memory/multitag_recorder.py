@@ -367,67 +367,72 @@ class MultiTagMemory:
     ) -> Optional[MultiTagMemoryRecord]:
         """
         更新记录
-        
-        ✅ Tag 维护（完整逻辑）：
-        1. 计算 removed_tags 和 added_tags
-        2. removed_tags:
-           - 引用计数 -1
-           - 从倒排索引移除
-           - 如果计数 = 0，删除 embedding
-        3. added_tags:
-           - 如果是新 tag，创建 embedding + 索引
-           - 引用计数 +1
-           - 添加到倒排索引
-        
-        Args:
-            rec_id: 记录 ID
-            tags: 新的标签列表（可选）
-            data_type: 新的数据类型（可选）
-            data_value: 新的数据值（可选）
-            text: 新的文本描述（可选）
-            image_path: 新的图片路径（可选）
+
+        参数说明：
+        - tags: 新的标签列表（完全替换）
+          - None 或 [] → 保持原 tags 不变
+          - 非空列表 → 完全替换为新 tags，自动维护引用计数
+
+        - text: 文本内容（同时更新 text_embedding 和 data["value"]）
+          - None → 保持原内容不变
+          - 提供值 → 更新内容和 embedding
+
+        - data_value: 数据值（直接更新 data["value"]）
+          - None → 保持原值不变
+          - ⚠️  如果同时提供 text 和 data_value，text 优先
+
+        - data_type: 数据类型（"text" 或 "image"）
+          - None → 保持原类型不变
+
+        - image_path: 图片路径
+          - None → 保持原路径不变
+
+        返回：
+        - 更新后的记录，如果 rec_id 不存在则返回 None
         """
         rec = self._store.get(rec_id)
         if rec is None:
             print(f"[Memory] Warning: Record {rec_id} not found")
             return None
 
-        # ✅ 处理 tags 变更
+        # ✅ tags：None 或 [] => 不更新（维持原 tags）
+        if tags is not None and len(tags) == 0:
+            tags = None
+
+        # ✅ 处理 tags 变更（仅当 tags 非空时）
         if tags is not None:
             old_tags = set(rec.tags)
             new_tags = set(tags)
-            
-            # 计算差异
+
             removed_tags = list(old_tags - new_tags)
             added_tags = list(new_tags - old_tags)
-            
-            # ✅ 移除旧 tags（可能导致 tag 被完全删除）
+
             if removed_tags:
                 print(f"[Memory] Removing tags from record {rec_id}: {removed_tags}")
                 self._decrement_tag_refs(removed_tags, rec_id)
-            
-            # ✅ 添加新 tags（可能创建新 tag）
+
             if added_tags:
                 print(f"[Memory] Adding tags to record {rec_id}: {added_tags}")
                 self._increment_tag_refs(added_tags, rec_id)
-            
-            # 更新记录
+
             rec.tags = tags
 
-        # 更新数据
-        if data_type is not None or data_value is not None:
-            old_type = rec.data.get("type")
-            old_value = rec.data.get("value")
-            rec.data = {
-                "type": data_type if data_type is not None else old_type,
-                "value": data_value if data_value is not None else old_value,
-            }
-
-        # 更新文本 embedding
+        # ✅ 更新文本内容和 embedding
+        # 注意：text 参数优先级高于 data_value，如果同时提供，text 会覆盖 data_value
         if text is not None:
+            # 更新 text_embedding（用于相似度检索）
             rec.text_embedding = self._encode_text(text)
+            # 同时更新 data["value"]（存储实际内容）
+            rec.data["value"] = text
+        elif data_value is not None:
+            # 仅在 text 未提供时才使用 data_value
+            rec.data["value"] = data_value
 
-        # 更新图片路径
+        # ✅ 更新数据类型（如果提供）
+        if data_type is not None:
+            rec.data["type"] = data_type
+
+        # ✅ 更新图片路径（提供才更新）
         if image_path is not None:
             rec.image_path = image_path
 
@@ -556,3 +561,179 @@ class MultiTagMemory:
         与 all_light 相同，但命名区分为快照语义，便于保存到 JSON
         """
         return self.all_light()
+
+    
+    def prune_to_max_records(self, n: int) -> List[int]:
+        """
+        将 memory 记录数量裁剪到最多 n 条。
+        若当前记录数 > n，则按 id 从小到大删除多余记录（删除最旧的）。
+
+        Args:
+            n: 允许保留的最大记录数（n >= 0）
+
+        Returns:
+            deleted_ids: 实际被删除的 record ids（按删除顺序）
+        """
+        if n < 0:
+            raise ValueError("n must be >= 0")
+
+        total = len(self._store)
+        if total <= n:
+            return []
+
+        # 需要删除的数量
+        need_delete = total - n
+
+        # 按 id 从小到大选出要删的记录
+        ids_sorted = sorted(self._store.keys())
+        to_delete = ids_sorted[:need_delete]
+
+        deleted_ids: List[int] = []
+        for rid in to_delete:
+            ok = self.delete(rid)  # 复用既有 delete()，保证 tag 生命周期一致
+            if ok:
+                deleted_ids.append(rid)
+
+        return deleted_ids
+
+    # -------------------------------------------------------------------------
+    # Persistence: Save & Resume
+    # -------------------------------------------------------------------------
+
+    def save_to_json(self, filepath: str) -> None:
+        """
+        保存 memory 状态到 JSON 文件（不包含 embeddings）
+
+        保存内容：
+        - 所有记录的 id, tags, data, image_path
+        - next_id（用于恢复 ID 生成器）
+
+        不保存：
+        - text_embedding（会在 resume 时重新生成）
+        - tag_embeddings_cache（会在 resume 时重新生成）
+        - tag_ref_count（会在 resume 时重新计算）
+        - tag_to_record_ids（会在 resume 时重新建立）
+
+        Args:
+            filepath: JSON 文件路径
+        """
+        import json
+        from pathlib import Path
+
+        # 准备数据
+        data = {
+            "version": "1.0",
+            "next_id": self._next_id,
+            "records": []
+        }
+
+        # 保存所有记录（不含 embeddings）
+        for rec in self._store.values():
+            data["records"].append({
+                "id": rec.id,
+                "tags": list(rec.tags),
+                "data": {
+                    "type": rec.data.get("type"),
+                    "value": rec.data.get("value"),
+                },
+                "image_path": str(rec.image_path) if rec.image_path else None,
+            })
+
+        # 写入文件
+        Path(filepath).parent.mkdir(parents=True, exist_ok=True)
+        with open(filepath, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
+        print(f"[Memory] Saved {len(data['records'])} records to {filepath}")
+
+    @classmethod
+    def resume_from_json(cls, filepath: str, encoder: BaseEncoder) -> "MultiTagMemory":
+        """
+        从 JSON 文件恢复 memory 状态
+
+        完整重建：
+        1. 恢复所有记录
+        2. 重新生成 text_embedding（每条记录）
+        3. 重新生成 tag_embeddings_cache（所有唯一 tags）
+        4. 重建 tag_ref_count（统计每个 tag 的引用次数）
+        5. 重建 tag_to_record_ids 倒排索引
+        6. 恢复 next_id
+
+        Args:
+            filepath: JSON 文件路径
+            encoder: Encoder 实例（用于生成 embeddings）
+
+        Returns:
+            恢复的 MultiTagMemory 实例
+        """
+        import json
+        from pathlib import Path
+
+        if not Path(filepath).exists():
+            raise FileNotFoundError(f"Memory file not found: {filepath}")
+
+        # 读取 JSON
+        with open(filepath, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        # 创建新实例
+        memory = cls(encoder=encoder)
+
+        # 恢复 next_id
+        memory._next_id = data.get("next_id", 1)
+
+        records_data = data.get("records", [])
+        print(f"[Memory] Resuming from {filepath}: {len(records_data)} records")
+
+        # Step 1: 收集所有唯一的 tags
+        all_tags: set[str] = set()
+        for rec_data in records_data:
+            tags = rec_data.get("tags", [])
+            all_tags.update(tags)
+
+        # Step 2: 预先生成所有 tag embeddings（避免重复计算）
+        print(f"[Memory] Generating embeddings for {len(all_tags)} unique tags...")
+        for tag in all_tags:
+            memory._tag_embeddings_cache[tag] = encoder.encode_obj(tag)
+
+        # Step 3: 恢复每条记录
+        for rec_data in records_data:
+            rec_id = rec_data["id"]
+            tags = rec_data.get("tags", [])
+            data_dict = rec_data.get("data", {})
+            data_type = data_dict.get("type", "text")
+            data_value = data_dict.get("value")
+            image_path = rec_data.get("image_path")
+
+            # 生成 text_embedding
+            text_embedding = None
+            if data_value is not None:
+                text_embedding = encoder.encode_text(str(data_value))
+
+            # 创建记录对象
+            record = MultiTagMemoryRecord(
+                id=rec_id,
+                tags=tags,
+                data={"type": data_type, "value": data_value},
+                text_embedding=text_embedding,
+                image_path=image_path,
+            )
+
+            # 添加到 store
+            memory._store[rec_id] = record
+
+            # 更新 tag 引用计数和倒排索引
+            for tag in tags:
+                # 引用计数
+                if tag not in memory._tag_ref_count:
+                    memory._tag_ref_count[tag] = 0
+                memory._tag_ref_count[tag] += 1
+
+                # 倒排索引
+                if tag not in memory._tag_to_record_ids:
+                    memory._tag_to_record_ids[tag] = set()
+                memory._tag_to_record_ids[tag].add(rec_id)
+
+        print(f"[Memory] Resume complete: {len(memory._store)} records, {len(memory._tag_embeddings_cache)} tags")
+
+        return memory
