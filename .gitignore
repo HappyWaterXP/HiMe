@@ -1,0 +1,8 @@
+**/__pycache*/
+*.pyc
+*.md
+.claude
+_server_data
+.venv
+_*
+archive/
