@@ -14,7 +14,7 @@ Your ONLY job is to judge whether the CURRENT subtask has been completed.
 
 Judgment Criteria:
 
-  - Inspect the recipe: done only if you fully recongnize the content of the paper on the table in the Wrist Camera View(LEFT HALF). You must can repeat the words on the paper.
+  - Inspect: done when the robot arm is above or extended into the box, and the wrist view shows the content and the black background of the box.
 
   - Pick & Place: done when the object has been successfully released at the destination or you observe that the robot arm is above a box and see its blck background.
 

@@ -93,8 +93,8 @@ def init_agents_once() -> None:
 
     # ✅ Create shared memory instance (persists across all tasks)
     # Check if we should resume memory from a file
-    memory_resume_path = os.environ.get("MEMORY_RESUME_PATH", "/Users/makabaka/code/mem_vla/_server_data/task_20260127_205643_df7e6dfa/logs/memory/memory_round_2_20260127_210037.json").strip()
-    # memory_resume_path = os.environ.get("MEMORY_RESUME_PATH", "").strip()
+    # memory_resume_path = os.environ.get("MEMORY_RESUME_PATH", "/Users/makabaka/code/mem_vla/_server_data/task_20260127_205643_df7e6dfa/logs/memory/memory_round_2_20260127_210037.json").strip()
+    memory_resume_path = os.environ.get("MEMORY_RESUME_PATH", "").strip()
     if memory_resume_path and os.path.exists(memory_resume_path):
         print(f"[App] 📂 Resuming memory from: {memory_resume_path}")
         try:

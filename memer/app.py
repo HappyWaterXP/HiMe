@@ -24,8 +24,8 @@ import openai
 os.environ.setdefault("OPENAI_API_KEY", "xx")
 os.environ.setdefault("OPENAI_BASE_URL", "https://aigc.x-see.cn/v1")
 
-# MODEL_NAME = os.environ.get("OPENAI_MODEL", "gpt-4o-2024-08-06")
-MODEL_NAME = os.environ.get("VLM_MODEL", "claude-sonnet-4-5-20250929")
+MODEL_NAME = os.environ.get("OPENAI_MODEL", "gpt-4o-2024-08-06")
+# MODEL_NAME = os.environ.get("VLM_MODEL", "claude-sonnet-4-5-20250929")
 REQUEST_TIMEOUT_S = int(os.environ.get("MEMER_OPENAI_TIMEOUT_S", "180"))
 
 MERGE_DISTANCE_D = int(os.environ.get("MEMER_MERGE_DISTANCE_D", "5"))
@@ -163,7 +163,8 @@ def load_persistent_keyframes_on_startup():
     """
     global NEXT_PERSISTENT_ID
 
-    keyframes_dir = os.environ.get("PERSISTENT_KEYFRAMES_DIR", "/Users/makabaka/code/mem_vla/memer_logs/21034118-78e1-4357-8d34-3d29a6d13e25/keyframes").strip()
+    # keyframes_dir = os.environ.get("PERSISTENT_KEYFRAMES_DIR", "/Users/makabaka/code/mem_vla/memer_logs/task1_backup/keyframes").strip()
+    keyframes_dir = os.environ.get("PERSISTENT_KEYFRAMES_DIR", "").strip()
     if not keyframes_dir:
         print(f"[MemER] ℹ️  No PERSISTENT_KEYFRAMES_DIR set, starting with empty persistent memory")
         return
@@ -411,15 +412,10 @@ def build_messages_for_action(global_instruction: str) -> Tuple[str, str]:
         "Action format rules (VERY IMPORTANT):\n"
         "You MUST output exactly ONE action string in ONE of the following formats:\n"
         "Format A (inspection): inspect <target>\n"
+        "<target> should be a container (the left box, the middle box, the right box)\n"
+        "Inspect is done when you observe that the robot arm is above a box and see its blck background.\n"
         "Format B (pick and place): pick up <object> <preposition> the <source_location> and place it <preposition> the <target_location>\n"
-        "Format C (reset): reset\n\n"
-        "RESET action rules:\n"
-        "- WHEN to reset: ONLY after a inspect action or a pick-and-place action is COMPLETELY FINISHED, the robot arm is above or extened into the box or above a recipe, and BEFORE starting a NEW pick-and-place action.\n"
-        "- WHEN NOT to reset: If a pick-and-place is IN PROGRESS (object partially picked or being transported), continue the action directly - do NOT reset.\n"
-        "- Reset completion criteria: In BOTH images, the robot arm is aligned parallel to what appears to be a rail or track, with the end effector open and facing downwards towards the table.\n"
-        "- Sequence pattern: [pick-and-place complete] → [reset] → [new pick-and-place] → [reset] → [next pick-and-place]\n\n"
         "LOCATION naming:\n"
-        "- You should distinguish the three plates using 'left', 'middle', or 'right'\n\n"
         "Do NOT add any extra prefixes or commentary.\n\n"
         "Output JSON with exactly:\n"
         '{ "action": string, "keyframe_positions": number[] }\n\n'
