@@ -97,7 +97,7 @@ def should_task_be_done(state: _TaskRuntimeState, ablation: AblationConfig) -> b
         - If state.is_task_complete is True (from <is_complete>yes tag) -> done
         - Otherwise -> not done
     """
-    from src.extractor import is_plan_done
+    from extractor import is_plan_done
 
     if ablation.planner_mode == "single_subtask":
         # Ablation 4: use explicit completion flag
@@ -117,7 +117,7 @@ def extract_current_subtask_description(state: _TaskRuntimeState, ablation: Abla
     For "single_subtask" mode:
         - Use getattr(state, 'current_subtask', None) (instead of plan list)
     """
-    from src.extractor import extract_current_subtask
+    from extractor import extract_current_subtask
 
     if ablation.planner_mode == "single_subtask":
         # Ablation 4: direct subtask string (no parsing needed)
@@ -147,7 +147,7 @@ def apply_planner_result_to_state(
         - summary -> state.summary
         - state.plan_list remains empty or placeholder
     """
-    from src.extractor import _extract_single_tag, is_plan_done
+    from extractor import _extract_single_tag, is_plan_done
 
     # Summary is universal
     state.summary = (planner_result.summary or "").strip()

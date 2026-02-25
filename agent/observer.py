@@ -4,9 +4,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import List
 
-from src.prompt_loader import load_prompt
-from src.extractor import parse_observer_output
-from src.client.observer_vlm import ObserverVLM
+from prompt_loader import load_prompt
+from extractor import parse_observer_output
+from client.observer_vlm import ObserverVLM
 
 
 def build_observer_user_message(plan_list: str) -> str:
@@ -15,17 +15,21 @@ def build_observer_user_message(plan_list: str) -> str:
 
     system(在 observer.txt 中) 负责说明：
     - 你是 EXECUTION OBSERVER
-    - 输入模式：Plan list + Combined images
+    # - 输入模式：Plan list + Combined images
+    - 输入模式： subtask + combined image        "Here is the current plan list for the task.\n"
+        "PLAN LIST:\n"
     - 任务：只判断 CURRENT subtask 是否已完成
     - 输出：严格的 <status> XML
 
     因此 user 只要把 plan list 提供给模型即可。
     """
-    plan_list_clean = plan_list.strip() or "(empty plan list)"
+    plan_list_clean = plan_list.strip() or "No Existing Subtask.\n"
 
     return (
-        "Here is the current plan list for the task.\n"
-        "PLAN LIST:\n"
+        # "Here is the current plan list for the task.\n"
+        # "PLAN LIST:\n"
+        "Here is the current subtask.\n"
+        "SUBTASK:\n"
         f"{plan_list_clean}\n\n"
     ).strip()
 

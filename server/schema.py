@@ -14,7 +14,7 @@ import os
 import uuid
 
 if TYPE_CHECKING:
-    from src.server.round_logger import RoundLogger
+    from server.round_logger import RoundLogger
 
 
 @dataclass

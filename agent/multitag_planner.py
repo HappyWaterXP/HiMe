@@ -8,10 +8,10 @@ import re
 import json
 from datetime import datetime
 
-from src.prompt_loader import load_prompt
-from src.client.planner_vlm import PlannerVLM
-from src.extractor import parse_planner_output, MemoryOperation
-from src.memory.multitag_recorder import MultiTagMemory
+from prompt_loader import load_prompt
+from client.planner_vlm import PlannerVLM
+from extractor import parse_planner_output, MemoryOperation
+from memory.multitag_recorder import MultiTagMemory
 
 
 # ========== 辅助函数：解析图片序号 ==========
@@ -154,24 +154,29 @@ class PlannerAgent:
         operations: List[MemoryOperation],
     ) -> str:
         """
-        Execute memory operations and return all results as text.
+        Execute memory operations and return all results.
 
         ✅ Key features:
         1. CREATE/UPDATE/DELETE: Return success/failure messages
         2. QUERY: Return complete record information (tags + text), collect image paths
-        3. Image paths are saved to self.last_query_image_paths for encoding in step()
-        4. QUERY 去重：在一次 _apply_memory_operations 调用中，跨多次 QUERY
-           对 record id 和 image_path 进行去重。
+        3. QUERY 去重：在一次 _apply_memory_operations 调用中，跨多次 QUERY
+        对 record id 去重；对 image_path 去重（同一张图只附带一次）
+        4. ✅ 使用“文本锚定”绑定图片：为每张去重后的图片分配 IMG#n，
+        并在 step() 中在图片前插入一个文本块 `[ATTACHMENT IMG#n]`，保证模型可对齐。
         """
         if self.memory is None:
-            return ""
+            self.last_query_image_attachments = []
+            return "No Existing Memory.\n"
 
         result_lines: List[str] = []
-        query_image_paths: List[str] = []
 
         # 跨整个 operations 列表去重（跨多个 QUERY）
-        seen_record_ids: set = set()
-        seen_image_paths: set = set()
+        seen_record_ids: set[int] = set()
+
+        # 图片去重 + ref 分配（跨多个 QUERY）
+        image_path_to_ref: dict[str, str] = {}
+        ref_to_path: dict[str, str] = {}
+        img_counter = 0
 
         for op in operations:
             t = (op.type or "").upper().strip()
@@ -194,9 +199,8 @@ class PlannerAgent:
                     if not records:
                         result_lines.append("  (No matching records found)")
                     else:
-                        for rec in records:
-                            # 跨 QUERY 对 record ID 去重：
-                            # 若此记录之前已经展示过，则这次不再重复输出。
+                        for rank, rec in enumerate(records, 1):
+                            # 跨 QUERY 对 record ID 去重：同一 rec（text/image）只展示一次
                             if rec.id in seen_record_ids:
                                 continue
                             seen_record_ids.add(rec.id)
@@ -204,31 +208,34 @@ class PlannerAgent:
                             score = scores.get(rec.id, 0.0)
                             data_type = rec.data.get("type")
                             value = rec.data.get("value")
-                            tags_str = ", ".join(rec.tags)
+                            tags_str = ", ".join(rec.tags or [])
 
-                            # Display record basic info
                             result_lines.append(
-                                f"  Record ID={rec.id} | Tags=[{tags_str}] | Score={score:.3f}"
+                                f"  #{rank} Record ID={rec.id} | Type={data_type} | Tags=[{tags_str}] | Score={score:.3f}"
                             )
 
-                            # Display text/description content
-                            # if value and data_type != 'image': # todo
                             if value:
                                 value_str = str(value)
-                                text_preview = value_str[:200]
-                                if len(value_str) > 200:
-                                    text_preview += "..."
+                                text_preview = value_str[:200] + ("..." if len(value_str) > 200 else "")
                                 result_lines.append(f"    Content: {text_preview}")
 
-                            # If has image, collect path（跨 QUERY 对 image_path 去重）
+                            # Image record: 允许不同 rec 引用同一张图，但图片只附带一次
                             if data_type == "image" and rec.image_path:
-                                img_path_str = str(rec.image_path)
-                                if img_path_str not in seen_image_paths:
-                                    seen_image_paths.add(img_path_str)
-                                    query_image_paths.append(rec.image_path)
+                                img_path = str(rec.image_path)
+
+                                if img_path not in image_path_to_ref:
+                                    img_counter += 1
+                                    ref = f"IMG#{img_counter}"
+                                    image_path_to_ref[img_path] = ref
+                                    ref_to_path[ref] = img_path
+                                else:
+                                    ref = image_path_to_ref[img_path]
+
+                                # 在文本里输出 ref（模型将通过 step() 的文本锚定与图片对齐）
                                 result_lines.append(
-                                    f"    [Image: {Path(rec.image_path).name}]"
+                                    f"    ImageRef: {ref} | file={Path(img_path).name}"
                                 )
+
                 except Exception as e:
                     result_lines.append(f"\n❌ QUERY failed: {str(e)}")
                     print(f"[Memory] QUERY error: {e}")
@@ -246,17 +253,14 @@ class PlannerAgent:
                     continue
 
                 try:
-                    # Resolve image indices to real paths
                     resolved_paths = self._resolve_image_paths(op.image_path)
 
-                    # Check if user specified image_path but resolution failed
                     if op.image_path and not resolved_paths:
                         result_lines.append(
                             f"\n⚠️  CREATE: Specified image_path='{op.image_path}' but no valid images found, creating text record instead"
                         )
 
                     if resolved_paths:
-                        # Create one record per image
                         created_ids = []
                         for img_path in resolved_paths:
                             rec = self.memory.create(
@@ -273,7 +277,6 @@ class PlannerAgent:
                             f"\n✅ CREATE: Created {len(created_ids)} image record(s) with IDs {created_ids} | Tags=[{tags_str}]"
                         )
                     else:
-                        # Pure text record
                         rec = self.memory.create(
                             tags=tags_to_use,
                             data_type="text",
@@ -291,21 +294,17 @@ class PlannerAgent:
 
             # --- UPDATE ---
             elif t == "UPDATE":
-                # op.id 可能是 int 或 str；这里强制转 str，避免 _safe_parse_rec_id 里 .strip() 报错
                 rec_id = self._safe_parse_rec_id(str(op.id) if op.id is not None else None)
                 if rec_id is None:
                     result_lines.append(f"\n❌ UPDATE failed: Invalid record ID '{op.id}'")
                     continue
 
                 try:
-                    # 只传“确实要更新”的字段；未提供则保持原样
                     update_kwargs = {"rec_id": rec_id}
 
-                    # text：提供才更新
                     if op.text is not None:
                         update_kwargs["text"] = op.text
 
-                    # image_path：提供才更新；且解析成功才更新（避免误覆盖）
                     if op.image_path is not None:
                         resolved_paths = self._resolve_image_paths(op.image_path)
                         final_image_path = resolved_paths[0] if resolved_paths else None
@@ -314,16 +313,14 @@ class PlannerAgent:
 
                     # tags：None/[] 都维持原 tags；只有非空才更新
                     if op.tags is not None:
-                        # normalize
                         if isinstance(op.tags, (list, tuple, set)):
                             normalized = [str(t).strip() for t in op.tags if str(t).strip()]
                         else:
                             s = str(op.tags).strip()
                             normalized = [s] if s else []
 
-                        if normalized:  # 只有非空才更新
+                        if normalized:
                             update_kwargs["tags"] = normalized
-                        # 否则不传 tags，维持原值
 
                     updated_rec = self.memory.update(**update_kwargs)
 
@@ -356,12 +353,18 @@ class PlannerAgent:
                     result_lines.append(f"\n❌ DELETE failed for ID={rec_id}: {str(e)}")
                     print(f"[Memory] DELETE error: {e}")
 
-        # 跨所有 QUERY 去重后的图片路径
-        self.last_query_image_paths = query_image_paths
+        # ✅ 跨所有 QUERY 去重后的“图片附件”（按 IMG#n 顺序）
+        attachments: List[Dict[str, Any]] = []
+        for i in range(1, img_counter + 1):
+            ref = f"IMG#{i}"
+            img_path = ref_to_path.get(ref)
+            if img_path:
+                attachments.append({"ref": ref, "image_path": img_path})
 
-        # del_id = self.memory.prune_to_max_records(8)
+        self.last_query_image_attachments = attachments
 
         return "\n".join(result_lines).strip()
+
 
     # ---------- 构造 User Prompt ----------
 
@@ -468,33 +471,22 @@ class PlannerAgent:
         current_plan_list: Optional[str] = None,
         max_tokens: int = 512,
         turn_num: int = 1
-    ) -> PlannerResult:
+    ) -> "PlannerResult":
         """
         一次模型调用
-        
-        Args:
-            user_instruction: 用户指令（仅 Turn 1）
-            image_paths: 原始输入图片路径列表（仅 Turn 1）
-            current_plan_list: 当前计划文本（仅 Turn 1）
-            max_tokens: 最大 token 数
-            turn_num: 当前轮次（1, 2, 3...）
-        
-        Returns:
-            PlannerResult 对象
-        
-        ✅ 核心逻辑：
-        - Turn 1: 发送完整任务（instruction + plan + 原始图片）
-        - Turn 2+: 发送查询结果（文本 + 检索到的图片编码）
+
+        ✅ Turn 2+：
+        - 发送查询结果文本
+        - 然后按 IMG#n 顺序附图
+        - ✅ 在每张图前插入文本锚：显示该图 ref + 被哪些 rec 引用（第三次出现引用关系）
+        形式：`[ATTACHMENT IMG#n | ReferencedByRecIDs=[...]]`
         """
-        
-        # ✅ 获取上一轮 QUERY 返回的图片路径
-        query_images_to_attach = self.last_query_image_paths.copy()
-        self.last_query_image_paths = []  # 清空，避免重复使用
+
+        query_attachments_to_attach = list(getattr(self, "last_query_image_attachments", []))
+        self.last_query_image_attachments = []
 
         # ========== 1. 构建文本 Prompt ==========
-        
         if turn_num == 1:
-            # Turn 1: 完整任务描述
             effective_plan = current_plan_list if current_plan_list is not None else self.plan_list
             user_text = self._build_user_prompt_turn1(
                 instruction=user_instruction or "",
@@ -502,42 +494,53 @@ class PlannerAgent:
                 image_count=len(image_paths) if image_paths else 0
             )
         else:
-            # Turn 2+: 查询结果
             user_text = self._build_user_prompt_turn_n(
                 turn_num=turn_num,
                 query_results_text=self.last_query_results_text
             )
 
         # ========== 2. 组装 Content（文本 + 图像）==========
-        
         content: List[Dict[str, Any]] = [{"type": "text", "text": user_text}]
 
-        # Turn 1: 添加用户提供的原始图片
+        # Turn 1: 原始图片
         if turn_num == 1 and image_paths:
-            for i, p in enumerate(image_paths, 1):
+            for p in image_paths:
                 if not p:
                     continue
                 img_block = self.vlm.base_client.encode_image_to_data_url(p)
                 if img_block is not None:
-                    # 注入原始路径，便于导出/还原
                     if isinstance(img_block, dict):
                         img_block.setdefault("meta", {})
                         img_block["meta"]["source_path"] = p
                     content.append(img_block)
 
-        # Turn 2+: Add images from Memory QUERY results
-        # ✅ Directly attach encoded images without additional text markers
-        if turn_num > 1 and query_images_to_attach:
-            for img_path in query_images_to_attach:
+        # Turn 2+: 查询图片（文本锚定）
+        if turn_num > 1 and query_attachments_to_attach:
+            for att in query_attachments_to_attach:
+                ref = att.get("ref") or "IMG#?"
+                img_path = att.get("image_path")
+                rec_ids = att.get("referenced_by", [])
+                if not img_path:
+                    continue
+
+                # ✅ 第二处（在附图阶段）再次显示引用关系：该图被哪些 rec 引用
+                content.append({
+                    "type": "text",
+                    "text": f"[ATTACHMENT {ref} | ReferencedByRecIDs={rec_ids}]"
+                })
+
                 img_block = self.vlm.base_client.encode_image_to_data_url(img_path)
                 if img_block is not None:
-                    # Inject source path for export/restore
                     if isinstance(img_block, dict):
                         img_block.setdefault("meta", {})
+                        # meta 仅用于你调试/导出，不依赖模型读取
                         img_block["meta"]["source_path"] = img_path
+                        img_block["meta"]["memory_image_ref"] = ref
+                        img_block["meta"]["memory_referenced_by"] = rec_ids
                     content.append(img_block)
                 else:
                     print(f"⚠️  Warning: Failed to encode query image, skipping: {img_path}")
+
 
         # ========== 3. 调用模型 ==========
         

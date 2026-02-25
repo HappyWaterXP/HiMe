@@ -25,7 +25,8 @@ class ObserverInteraction:
     """Record of a single Observer call."""
     timestamp: float
     image_paths: List[str]
-    plan_list: str
+    # plan_list: str
+    subtask: str
     status: str  # "done" | "not_done"
     raw_output: str
 
@@ -34,7 +35,8 @@ class ObserverInteraction:
             "timestamp": self.timestamp,
             "timestamp_readable": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(self.timestamp)),
             "image_paths": self.image_paths,
-            "plan_list": self.plan_list,
+            # "plan_list": self.plan_list,
+            "subtask": self.subtask,
             "status": self.status,
             "raw_output": self.raw_output,
         }
@@ -141,7 +143,8 @@ class RoundLogger:
     def add_observer_interaction(
         self,
         image_paths: List[str],
-        plan_list: str,
+        # plan_list: str,
+        subtask: str,
         status: str,
         raw_output: str,
         timestamp: Optional[float] = None,
@@ -151,7 +154,8 @@ class RoundLogger:
 
         Args:
             image_paths: Image paths passed to Observer
-            plan_list: Plan list passed to Observer
+            # plan_list: Plan list passed to Observer
+            subtask: subtask passed to Observer
             status: Observer result ("done" or "not_done")
             raw_output: Raw XML output from Observer
             timestamp: Optional timestamp (defaults to current time)
@@ -163,7 +167,8 @@ class RoundLogger:
         interaction = ObserverInteraction(
             timestamp=timestamp if timestamp is not None else time.time(),
             image_paths=image_paths,
-            plan_list=plan_list,
+            # plan_list=plan_list,
+            subtask=subtask,
             status=status,
             raw_output=raw_output,
         )

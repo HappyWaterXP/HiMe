@@ -26,19 +26,66 @@ from .task_state import create_initial_task_state, save_pil_to_dir
 from .image_utils import combine_two_pil_horizontally
 from .round_logger import RoundLogger
 
-from src.agent.multitag_planner import PlannerAgent
+from agent.multitag_planner import PlannerAgent
         # noqa
-from src.agent.observer import ObserverAgent
-from src.extractor import extract_current_subtask, is_plan_done
-
-from src.infer.loop import (
-    build_planner_user_instruction,
-    sample_up_to_n_evenly,
-    observer_loop_with_scheduler_window,
-)
+from agent.observer import ObserverAgent
+from extractor import extract_current_subtask, is_plan_done
 
 from .image_utils import RobotImageInput
 
+PLANNER_PREFIX_EN = (
+    "Your current plan list represents the latest plan you have made."
+    "Based on the new input, update this plan list by adding, modifying, or marking items as completed as needed."
+    "You must preserve previously completed tasks to reflect the full workflow, and your new plan must be an update of the previous plan, even when a new task arrives"
+)
+
+def build_planner_user_instruction(
+    base_instruction: str,
+    current_plan_list: str,
+    is_first_round: bool,
+) -> str:
+    """
+    构建 Planner 的用户指令
+
+    - 每次调用都包含 base_instruction（即当前的 global_instruction）
+    - 首轮：只有 base_instruction
+    - 非首轮：base_instruction + 前缀 + 当前计划
+
+    注意：不再需要 user_new_input 参数，因为新的用户指令会直接替换 global_instruction
+    """
+    if is_first_round:
+        # 首轮：只传 global instruction
+        return base_instruction
+
+    # 非首轮：global instruction + 前缀 + 当前计划
+    parts: List[str] = []
+    parts.append(base_instruction)
+    parts.append("\n")
+    parts.append(PLANNER_PREFIX_EN)
+    parts.append("\n----- Current Plan List -----")
+    parts.append((current_plan_list or "").strip())
+
+    return "\n".join(parts)
+
+def sample_up_to_n_evenly(paths: List[str], n: int) -> List[str]:
+    """
+    If len(paths) > n, return exactly n samples evenly spaced across the list,
+    always keeping the last element. If len(paths) <= n, return paths as-is.
+    """
+    L = len(paths)
+    if n <= 0 or L == 0:
+        return []
+    if L <= n:
+        return paths
+    if n == 1:
+        return [paths[-1]]
+
+    # Evenly spaced indices from 0..L-1, inclusive; last index always L-1.
+    # i in [0, n-1]
+    indices = [(i * (L - 1)) // (n - 1) for i in range(n)]
+    # indices 单调不减，且 indices[-1] == L-1
+
+    return [paths[i] for i in indices]
 
 class ServerTaskManager:
     """

@@ -4,7 +4,7 @@ from dataclasses import dataclass, asdict
 from typing import Dict, List, Literal, Optional, Any, Tuple, Set
 import numpy as np
 
-from src.memory.encoder import BaseEncoder
+from .encoder import BaseEncoder
 
 
 DataType = Literal["text", "image"]
@@ -18,13 +18,15 @@ class MultiTagMemoryRecord:
     字段说明：
     - id: 记录唯一标识
     - tags: 标签列表
-    - data: {"type": "text"|"image", "value": ...}
+    - data_type: text/image
+    - text: 如果 data_type 是 image, 则为图片的 caption
     - text_embedding: 文本描述的 embedding（每条记录单独存储）
     - image_path: 图片路径（可选）
     """
     id: int
     tags: List[str]
-    data: Dict[str, Any]
+    data_type: DataType = Literal["text", "image"]
+    text: str
     text_embedding: Optional[List[float]] = None
     image_path: Optional[str] = None
 
@@ -202,8 +204,7 @@ class MultiTagMemory:
         self,
         tags: List[str],
         data_type: DataType,
-        data_value: Any,
-        text: Optional[str] = None,
+        text: srt,
         image_path: Optional[str] = None,
     ) -> MultiTagMemoryRecord:
         """
@@ -216,7 +217,6 @@ class MultiTagMemory:
         Args:
             tags: 标签列表，如 ["apple", "fruit", "red"]
             data_type: "text" 或 "image"
-            data_value: 数据内容
             text: 文本描述（用于检索）
             image_path: 图片路径（仅当 data_type="image" 时使用）
         """
@@ -232,7 +232,8 @@ class MultiTagMemory:
         record = MultiTagMemoryRecord(
             id=rec_id,
             tags=tags,
-            data={"type": data_type, "value": data_value},
+            data_type=data_type,
+            text=text,
             text_embedding=txt_emb,
             image_path=image_path,
         )
@@ -256,7 +257,7 @@ class MultiTagMemory:
         检索记录（优化版）
         
         ✅ 优化逻辑：
-        1. Tag 匹配：找到最相似的 tag，通过倒排索引快速获取所有相关记录
+        1. Tag 匹配：找到最相似的 tag, 通过倒排索引快速获取所有相关记录
         2. Text 匹配：只有 tag 匹配失败时才遍历所有记录
         
         Returns:
@@ -300,7 +301,7 @@ class MultiTagMemory:
                     return matched_records, sim_scores
 
         # 2) Text-level fallback
-        if query_text is not None:
+        if query_tags is None and query_text is not None:
             query_text_emb = self._encode_text(query_text)
             sims: List[Tuple[int, float]] = []
 
@@ -339,7 +340,7 @@ class MultiTagMemory:
             query_tags=[content],
             query_text=None,
             tag_threshold=tag_threshold,
-            top_k=top_k,
+            top_k=0,
         )
         if tag_matches:
             return tag_matches, tag_scores
@@ -361,81 +362,51 @@ class MultiTagMemory:
         rec_id: int,
         tags: Optional[List[str]] = None,
         data_type: Optional[DataType] = None,
-        data_value: Optional[Any] = None,
         text: Optional[str] = None,
         image_path: Optional[str] = None,
     ) -> Optional[MultiTagMemoryRecord]:
         """
-        更新记录
-
-        参数说明：
-        - tags: 新的标签列表（完全替换）
-          - None 或 [] → 保持原 tags 不变
-          - 非空列表 → 完全替换为新 tags，自动维护引用计数
-
-        - text: 文本内容（同时更新 text_embedding 和 data["value"]）
-          - None → 保持原内容不变
-          - 提供值 → 更新内容和 embedding
-
-        - data_value: 数据值（直接更新 data["value"]）
-          - None → 保持原值不变
-          - ⚠️  如果同时提供 text 和 data_value，text 优先
-
-        - data_type: 数据类型（"text" 或 "image"）
-          - None → 保持原类型不变
-
-        - image_path: 图片路径
-          - None → 保持原路径不变
-
-        返回：
-        - 更新后的记录，如果 rec_id 不存在则返回 None
+        更新记录：
+        - rec_id 必填
+        - 其余字段：只要参数不为 None 就覆盖；为 None 则保持不变
         """
         rec = self._store.get(rec_id)
         if rec is None:
             print(f"[Memory] Warning: Record {rec_id} not found")
             return None
 
-        # ✅ tags：None 或 [] => 不更新（维持原 tags）
-        if tags is not None and len(tags) == 0:
-            tags = None
-
-        # ✅ 处理 tags 变更（仅当 tags 非空时）
+        # 1) tags：只要传了（非 None）就覆盖，并正确维护引用计数
         if tags is not None:
-            old_tags = set(rec.tags)
+            old_tags = set(rec.tags or [])
             new_tags = set(tags)
 
             removed_tags = list(old_tags - new_tags)
             added_tags = list(new_tags - old_tags)
 
-            if removed_tags:
-                print(f"[Memory] Removing tags from record {rec_id}: {removed_tags}")
-                self._decrement_tag_refs(removed_tags, rec_id)
-
             if added_tags:
                 print(f"[Memory] Adding tags to record {rec_id}: {added_tags}")
                 self._increment_tag_refs(added_tags, rec_id)
 
-            rec.tags = tags
+            if removed_tags:
+                print(f"[Memory] Removing tags from record {rec_id}: {removed_tags}")
+                self._decrement_tag_refs(removed_tags, rec_id)
 
-        # ✅ 更新文本内容和 embedding
-        # 注意：text 参数优先级高于 data_value，如果同时提供，text 会覆盖 data_value
+            rec.tags = tags  # 允许 [] 覆盖（清空）
+
+        # 2) text：传了就覆盖 value 并重算 embedding；没传就都不动
         if text is not None:
-            # 更新 text_embedding（用于相似度检索）
+            rec.text = text
             rec.text_embedding = self._encode_text(text)
-            # 同时更新 data["value"]（存储实际内容）
-            rec.data["value"] = text
-        elif data_value is not None:
-            # 仅在 text 未提供时才使用 data_value
-            rec.data["value"] = data_value
 
-        # ✅ 更新数据类型（如果提供）
+        # 3) data_type：传了就覆盖
         if data_type is not None:
-            rec.data["type"] = data_type
+            rec.data_type = data_type
 
-        # ✅ 更新图片路径（提供才更新）
+        # 4) image_path：传了就覆盖（允许传 "" 来清空，若你需要）
         if image_path is not None:
             rec.image_path = image_path
 
+        # 一般不需要再写回 _store（rec 是引用），但写了也无妨
         self._store[rec_id] = rec
         return rec
 
@@ -539,29 +510,19 @@ class MultiTagMemory:
     def all_light(self) -> List[Dict[str, Any]]:
         """
         返回所有记录的轻量视图（不包含 text_embedding）
-        用于调试、打印或对外展示，避免泄露 embedding 数据
+        用于调试、打印或对外展示
         """
         light_records: List[Dict[str, Any]] = []
         for rec in self._store.values():
             light_records.append({
                 "id": rec.id,
                 "tags": list(rec.tags),
-                "data": {
-                    "type": rec.data.get("type"),
-                    "value": rec.data.get("value"),
-                },
+                "data_type": rec.data_type,
+                "text": rec.text,
                 "image_path": rec.image_path,
                 # 不返回 text_embedding
             })
         return light_records
-
-    def snapshot_light(self) -> List[Dict[str, Any]]:
-        """
-        轻量快照，不包含 text_embedding
-        与 all_light 相同，但命名区分为快照语义，便于保存到 JSON
-        """
-        return self.all_light()
-
     
     def prune_to_max_records(self, n: int) -> List[int]:
         """
@@ -632,10 +593,8 @@ class MultiTagMemory:
             data["records"].append({
                 "id": rec.id,
                 "tags": list(rec.tags),
-                "data": {
-                    "type": rec.data.get("type"),
-                    "value": rec.data.get("value"),
-                },
+                "data_type": rec.data_type,
+                "text": rec.text,
                 "image_path": str(rec.image_path) if rec.image_path else None,
             })
 
@@ -726,21 +685,21 @@ class MultiTagMemory:
         for rec_data in records_data:
             rec_id = rec_data["id"]
             tags = rec_data.get("tags", [])
-            data_dict = rec_data.get("data", {})
-            data_type = data_dict.get("type", "text")
-            data_value = data_dict.get("value")
+            data_type = rec_data.get("data_type", "text")
+            text = rec_data.get("text", "")
             image_path = rec_data.get("image_path")
 
             # 生成 text_embedding
             text_embedding = None
             if data_value is not None:
-                text_embedding = encoder.encode_text(str(data_value))
+                text_embedding = encoder.encode_text(str(text))
 
             # 创建记录对象
             record = MultiTagMemoryRecord(
                 id=rec_id,
                 tags=tags,
-                data={"type": data_type, "value": data_value},
+                data_type=data_type,
+                text=text,
                 text_embedding=text_embedding,
                 image_path=image_path,
             )

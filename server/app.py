@@ -27,13 +27,13 @@ from .task_manager import ServerTaskManager
 from .schema import TaskConfig, TaskRuntimeState
 from .image_utils import RobotImageInput
 # VLM client & agents
-from src.client.base_vlm_client import BaseVLMClient
-from src.client.planner_vlm import PlannerVLM
-from src.client.observer_vlm import ObserverVLM
-from src.agent.multitag_planner import PlannerAgent
-from src.agent.observer import ObserverAgent
-from src.memory.multitag_recorder import MultiTagMemory
-from src.memory.encoder import OpenAIEmbeddingEncoder
+from client.base_vlm_client import BaseVLMClient
+from client.planner_vlm import PlannerVLM
+from client.observer_vlm import ObserverVLM
+from agent.multitag_planner import PlannerAgent
+from agent.observer import ObserverAgent
+from memory.multitag_recorder import MultiTagMemory
+from memory.encoder import OpenAIEmbeddingEncoder
 
 app = FastAPI()
 task_manager = ServerTaskManager()
@@ -181,10 +181,10 @@ async def on_startup():
 async def create_task(
     global_instruction: str = Form(..., description="High-level task description for the robot"),
     initial_waist_image: Optional[UploadFile] = File(
-        None, description="Initial waist camera image (optional)"
+        ..., description="Initial waist camera image"
     ),
     initial_image: UploadFile = File(
-        ..., description="Initial main camera image (required)"
+        ..., description="Initial main camera image"
     ),
     observer_window_size: int = Form(8),
     human_intervene_for_planner: bool = Form(False),
@@ -195,8 +195,8 @@ async def create_task(
     Create a new task with an initial robot observation.
 
     Parameters:
-    - initial_waist_image: waist view (optional)
-    - initial_image: main view (required)
+    - initial_waist_image: waist view
+    - initial_image: main view
     - reset_planner_conversation: (default: True) whether to reset planner's conversation history
       - True: Each task starts with fresh conversation history
       - False: Preserve conversation history across tasks
@@ -214,20 +214,15 @@ async def create_task(
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid initial main image: {e}")
 
-    waist_img: Optional[Image.Image] = None
-    if initial_waist_image is not None:
-        try:
-            waist_img = file_to_pil(initial_waist_image)
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Invalid initial waist image: {e}")
+    try:
+        waist_img = file_to_pil(initial_waist_image)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid initial waist image: {e}")
 
     # ✅ Reset planner conversation if requested
     if reset_planner_conversation:
         print(f"[App] 🔄 Resetting planner conversation history for new task")
         task_manager.planner_agent.reset()
-    else:
-        memory_count = len(task_manager.planner_agent.memory.all()) if task_manager.planner_agent.memory else 0
-        print(f"[App] ♻️  Preserving planner conversation history (memory: {memory_count} records)")
 
     cfg = TaskConfig(
         observer_window_size=observer_window_size,
@@ -253,10 +248,10 @@ async def upload_step_image(
     task_id: str,
     # 关键修改：接收 List[UploadFile]，默认值为空列表以处理可选情况
     waist_image: List[UploadFile] = File(
-        default=[], description="Waist camera images sequence for this step (optional)"
+        ..., description="Waist camera images sequence for this step"
     ),
     image: List[UploadFile] = File(
-        ..., description="Main camera images sequence for this step (required)"
+        ..., description="Main camera images sequence for this step"
     ),
 ):
     """
@@ -280,18 +275,12 @@ async def upload_step_image(
         raise HTTPException(status_code=400, detail=f"Invalid main image in sequence: {e}")
 
     # 2. Process Waist Images List
-    waist_imgs_pil: List[Image.Image] = []
-    if waist_image:
-        try:
-            waist_imgs_pil = [file_to_pil(img) for img in waist_image]
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Invalid waist image in sequence: {e}")
+    try:
+        waist_imgs_pil = [file_to_pil(img) for img in waist_image]
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid waist image in sequence: {e}")
 
     # 3. Construct Robot Input
-    # 注意：这里假设 RobotImageInput 或 task_manager 能够处理 List[Image.Image]。
-    # 如果 RobotImageInput 严格要求单张图片，你可能需要修改它的定义，
-    # 或者在这里只传最后一张: image=main_imgs_pil[-1] (但这会丢失 buffer 的意义)。
-    # 下面代码假设我们传递整个列表。
     
     # 如果 RobotImageInput 只接受单图，但你想传列表，你需要修改 RobotImageInput 的定义。
     # 这里为了兼容性，我构造了一个包含列表的输入，请确保后端逻辑能处理它。
@@ -331,83 +320,83 @@ async def user_instruction(task_id: str, body: UserInstructionBody):
 
 # ========= Memory Management =========
 
-class SaveMemoryBody(BaseModel):
-    output_path: str
+# class SaveMemoryBody(BaseModel):
+#     output_path: str
 
 
-@app.post("/tasks/{task_id}/memory/save")
-async def save_memory(task_id: str, body: SaveMemoryBody):
-    """
-    Save current memory state to JSON file.
+# @app.post("/tasks/{task_id}/memory/save")
+# async def save_memory(task_id: str, body: SaveMemoryBody):
+#     """
+#     Save current memory state to JSON file.
 
-    Args:
-        task_id: Task ID (for compatibility, currently all tasks share the same memory)
-        body.output_path: Path where to save the memory JSON file
+#     Args:
+#         task_id: Task ID (for compatibility, currently all tasks share the same memory)
+#         body.output_path: Path where to save the memory JSON file
 
-    Returns:
-        {
-            "success": true,
-            "output_path": "path/to/file.json",
-            "record_count": 10
-        }
-    """
-    if task_id not in task_manager.tasks:
-        raise HTTPException(status_code=404, detail="Task not found")
+#     Returns:
+#         {
+#             "success": true,
+#             "output_path": "path/to/file.json",
+#             "record_count": 10
+#         }
+#     """
+#     if task_id not in task_manager.tasks:
+#         raise HTTPException(status_code=404, detail="Task not found")
 
-    if task_manager.planner_agent is None or task_manager.planner_agent.memory is None:
-        raise HTTPException(status_code=500, detail="Memory not initialized")
+#     if task_manager.planner_agent is None or task_manager.planner_agent.memory is None:
+#         raise HTTPException(status_code=500, detail="Memory not initialized")
 
-    try:
-        memory = task_manager.planner_agent.memory
-        memory.save_to_json(body.output_path)
+#     try:
+#         memory = task_manager.planner_agent.memory
+#         memory.save_to_json(body.output_path)
 
-        return {
-            "success": True,
-            "output_path": body.output_path,
-            "record_count": len(memory.all()),
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to save memory: {str(e)}")
+#         return {
+#             "success": True,
+#             "output_path": body.output_path,
+#             "record_count": len(memory.all()),
+#         }
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=f"Failed to save memory: {str(e)}")
 
 
-@app.get("/tasks/{task_id}/memory")
-async def get_memory(task_id: str):
-    """
-    Get current memory state (lightweight view without embeddings).
+# @app.get("/tasks/{task_id}/memory")
+# async def get_memory(task_id: str):
+#     """
+#     Get current memory state (lightweight view without embeddings).
 
-    Args:
-        task_id: Task ID (for compatibility, currently all tasks share the same memory)
+#     Args:
+#         task_id: Task ID (for compatibility, currently all tasks share the same memory)
 
-    Returns:
-        {
-            "record_count": 10,
-            "records": [
-                {
-                    "id": 1,
-                    "tags": ["apple", "fruit"],
-                    "data": {"type": "text", "value": "..."},
-                    "image_path": null
-                },
-                ...
-            ],
-            "tag_stats": {"apple": 1, "fruit": 2, ...}
-        }
-    """
-    if task_id not in task_manager.tasks:
-        raise HTTPException(status_code=404, detail="Task not found")
+#     Returns:
+#         {
+#             "record_count": 10,
+#             "records": [
+#                 {
+#                     "id": 1,
+#                     "tags": ["apple", "fruit"],
+#                     "data": {"type": "text", "value": "..."},
+#                     "image_path": null
+#                 },
+#                 ...
+#             ],
+#             "tag_stats": {"apple": 1, "fruit": 2, ...}
+#         }
+#     """
+#     if task_id not in task_manager.tasks:
+#         raise HTTPException(status_code=404, detail="Task not found")
 
-    if task_manager.planner_agent is None or task_manager.planner_agent.memory is None:
-        raise HTTPException(status_code=500, detail="Memory not initialized")
+#     if task_manager.planner_agent is None or task_manager.planner_agent.memory is None:
+#         raise HTTPException(status_code=500, detail="Memory not initialized")
 
-    try:
-        memory = task_manager.planner_agent.memory
-        records = memory.all_light()
-        tag_stats = memory.get_tag_stats()
+#     try:
+#         memory = task_manager.planner_agent.memory
+#         records = memory.all_light()
+#         tag_stats = memory.get_tag_stats()
 
-        return {
-            "record_count": len(records),
-            "records": records,
-            "tag_stats": tag_stats,
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get memory: {str(e)}")
+#         return {
+#             "record_count": len(records),
+#             "records": records,
+#             "tag_stats": tag_stats,
+#         }
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=f"Failed to get memory: {str(e)}")
