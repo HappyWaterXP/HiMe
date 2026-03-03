@@ -121,7 +121,7 @@ class InteractiveMemoryTest:
             score = scores.get(rec.id, 0.0)
             print(f"📄 Record ID: {rec.id}")
             print(f"   Object: {rec.obj_name}")
-            print(f"   Text: {rec.data.get('value', 'N/A')}")
+            print(f"   Text: {rec.text}")
             print(f"   Similarity: {score:.4f}")
             print()
     
@@ -140,7 +140,7 @@ class InteractiveMemoryTest:
         print("-" * 60)
         
         for rec in sorted(records, key=lambda r: r.id):
-            print(f"ID: {rec.id} | Object: {rec.obj_name:15} | Text: {rec.data.get('value', 'N/A')}")
+            print(f"ID: {rec.id} | Object: {rec.obj_name:15} | Text: {rec.text}")
         
         print()
     

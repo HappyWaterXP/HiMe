@@ -14,9 +14,7 @@ Responsibilities:
 
 from __future__ import annotations
 
-from typing import Dict, Optional
-from PIL import Image
-import time
+from typing import Dict, Optional, List
 
 from .schema import (
     TaskRuntimeState,
@@ -159,10 +157,8 @@ class ServerTaskManager:
             is_first_round=True,
         )
 
-        # Determine max_inner_rounds based on memory usage
-        from src.server.ablation_logic import get_ablation_config
-        ablation = get_ablation_config()
-        max_rounds = 2 if ablation.use_memory else 1
+        # Determine max_inner_rounds based on runtime config.
+        max_rounds = 2 if state.config.use_memory else 1
 
         res = self.planner_agent.run_refine(
             image_paths=planner_images,
@@ -198,34 +194,18 @@ class ServerTaskManager:
 
         print(f"[TaskManager] First planner done")
 
-        # Apply planner result to state (ablation-aware)
-        from src.server.ablation_logic import (
-            apply_planner_result_to_state,
-            should_task_be_done,
-            extract_current_subtask_description,
-            ensure_ablation_fields
-        )
-
-        # Ensure ablation-specific fields exist on state
-        ensure_ablation_fields(state, ablation)
-
-        # Apply result based on ablation mode
-        apply_planner_result_to_state(state, res, ablation)
-
-        # Check if task is already done
-        if should_task_be_done(state, ablation):
+        if is_plan_done(state.plan_list):
             state.is_done = True
             state.current_subtask_description = None
             print(f"[TaskManager] Task already complete")
         else:
-            subtask_desc = extract_current_subtask_description(state, ablation)
+            subtask_desc = extract_current_subtask(state.plan_list)
             if subtask_desc:
                 state.current_subtask_description = subtask_desc
                 # current subtask image segment starts at the last appended index
                 state.current_subtask_start_idx = len(state.image_paths) - 1 if state.image_paths else 0
                 print(f"[TaskManager] Task initialized: subtask='{subtask_desc}', start_idx={state.current_subtask_start_idx}")
             else:
-                # No recognizable subtask; treat as done
                 state.is_done = True
                 state.current_subtask_description = None
                 print(f"[TaskManager] No subtask found, marking as done")
@@ -250,14 +230,12 @@ class ServerTaskManager:
            - Save to disk and update state.image_paths.
         3. Run Observer/Planner logic ONCE based on the latest state.
         """
-        from src.server.ablation_logic import get_ablation_config
-        # 确保能创建一个临时的单帧 RobotImageInput 用于复用保存逻辑
-        from src.server.image_utils import RobotImageInput as SingleFrameInput 
+        # Reuse the single-frame save path by wrapping buffer items.
+        from server.image_utils import RobotImageInput as SingleFrameInput 
 
         assert self.planner_agent is not None
         assert self.observer_agent is not None
 
-        ablation = get_ablation_config()
         state = self._get_task(task_id)
         
         # --- 1. Normalize Inputs to Lists ---
@@ -300,11 +278,10 @@ class ServerTaskManager:
             print(f"[TaskManager] Task already done, images stored.")
             return state
 
-        # --- 3. Check ablation mode ---
-        if not ablation.use_observer:
-            # NO OBSERVER MODE: Directly call planner
-            print(f"[TaskManager] No observer mode - calling planner directly")
-            self._run_planner_refine_without_observer(state, ablation)
+        # --- 3. Optional observer bypass ---
+        if not state.config.use_observer:
+            print(f"[TaskManager] Observer disabled, calling planner directly")
+            self._run_planner_refine_without_observer(state)
             return state
 
         # --- 4. STANDARD MODE: Run observer ---
@@ -344,7 +321,7 @@ class ServerTaskManager:
                 state.round_logger.start_round()
             state.round_logger.add_observer_interaction(
                 image_paths=observer_images,
-                plan_list=state.plan_list,
+                subtask=state.current_subtask_description or state.plan_list,
                 status=status,
                 raw_output=r.raw_xml or "",
                 timestamp=None,
@@ -357,14 +334,14 @@ class ServerTaskManager:
         # If observer says done
         if status == "done":
             print(f"[TaskManager] Observer says done, calling planner refine")
-            self._run_planner_refine_without_user_instruction(state, ablation)
+            self._run_planner_refine_without_user_instruction(state)
         
         # Stuck detection (check total steps in current subtask)
         # 注意：这里 full_segment 包含了刚刚加入的一整个 buffer，所以如果 buffer 很大，
         # 可能会立即触发 stuck 逻辑，这是符合预期的（动作太多了还没做完）
         elif len(full_segment) > 50:
             print(f"[TaskManager] Task maybe stuck (segment len {len(full_segment)} > 10), calling planner refine")
-            self._run_planner_refine_without_user_instruction(state, ablation)
+            self._run_planner_refine_without_user_instruction(state)
 
         return state
 
@@ -449,24 +426,10 @@ class ServerTaskManager:
     def _run_planner_refine_without_user_instruction(
         self,
         state: TaskRuntimeState,
-        ablation: Optional[Any] = None,
     ) -> None:
         """
         Planner refine when observer says current subtask is done.
-
-        Now compatible with both:
-        - plan mode: refine/extend plan_list and derive current subtask via extract_current_subtask(plan_list)
-        - no_plan mode: planner outputs next subtask directly (ablation-aware state update)
         """
-        from src.server.ablation_logic import (
-            get_ablation_config,
-            apply_planner_result_to_state,
-            should_task_be_done,
-            extract_current_subtask_description,
-        )
-
-        if ablation is None:
-            ablation = get_ablation_config()
 
         if state.is_done:
             return
@@ -476,25 +439,14 @@ class ServerTaskManager:
         end = len(state.image_paths)
         segment = state.image_paths[start:end] if end > start else []
 
-        # no_plan mode typically needs fewer images (optional; tune as you like)
-        is_no_plan = (ablation.planner_mode == "single_subtask")
-        max_n = 1 if is_no_plan else 8
-        planner_images = sample_up_to_n_evenly(segment, max_n) if segment else []
-
-        # ---- build planner input ----
-        if is_no_plan:
-            # In no_plan mode: use raw global instruction (no "update this plan" wrapper)
-            user_instruction = state.global_instruction
-            initial_plan_list = state.plan_list  # can be "", kept for compatibility
-            max_rounds = 1  # usually no memory + single turn
-        else:
-            user_instruction = build_planner_user_instruction(
-                base_instruction=state.global_instruction,
-                current_plan_list=state.plan_list,
-                is_first_round=False,
-            )
-            initial_plan_list = state.plan_list
-            max_rounds = 2 if getattr(ablation, "use_memory", False) else 1
+        planner_images = sample_up_to_n_evenly(segment, 8) if segment else []
+        user_instruction = build_planner_user_instruction(
+            base_instruction=state.global_instruction,
+            current_plan_list=state.plan_list,
+            is_first_round=False,
+        )
+        initial_plan_list = state.plan_list
+        max_rounds = 2 if state.config.use_memory else 1
 
         # ---- call planner ----
         res = self.planner_agent.run_refine(
@@ -525,27 +477,6 @@ class ServerTaskManager:
             )
             state.round_logger.end_round()
 
-        # ---- update state (mode-specific) ----
-        if is_no_plan:
-            # Let ablation logic decide how to store outputs (could be current_subtask_description, etc.)
-            apply_planner_result_to_state(state, res, ablation)
-
-            if should_task_be_done(state, ablation):
-                state.is_done = True
-                state.current_subtask_description = None
-                return
-
-            new_sub_desc = extract_current_subtask_description(state, ablation)
-            if not new_sub_desc:
-                state.is_done = True
-                state.current_subtask_description = None
-                return
-
-            state.current_subtask_description = new_sub_desc
-            state.current_subtask_start_idx = len(state.image_paths)
-            return
-
-        # ---- plan mode (original behavior) ----
         state.plan_list = (res.plan_text or "").strip()
         state.summary = (res.summary or "").strip()
 
@@ -563,26 +494,22 @@ class ServerTaskManager:
         state.current_subtask_description = new_sub_desc
         state.current_subtask_start_idx = len(state.image_paths)
 
-    # ---------- Internal: planner refine without observer (no_plan mode) ----------
+    # ---------- Internal: planner refine without observer ----------
 
     def _run_planner_refine_without_observer(
         self,
         state: TaskRuntimeState,
-        ablation: Any,
     ) -> None:
         """
-        Planner refine for "no_plan" mode (periodic trigger, no observer).
+        Planner refine when observer is disabled.
 
         This is called every time a new image arrives (no observer filtering).
 
         Logic:
         - Use images from current_subtask_start_idx to the latest.
-        - Call planner to get single next subtask.
+        - Call planner to refresh plan list directly.
         - Update state with new subtask and completion status.
-        - max_inner_rounds=1 (no memory, single turn).
-
-        In no_plan mode, always use the original global_instruction directly,
-        without any plan list update prefixes.
+        - Use runtime config to control inner rounds.
         """
         if state.is_done:
             return
@@ -592,12 +519,9 @@ class ServerTaskManager:
         segment = state.image_paths[start:end] if end > start else []
         planner_images = sample_up_to_n_evenly(segment, 8) if segment else []
 
-        # In no_plan mode: always use the original instruction directly
-        # No plan list prefixes, no "update this plan" instructions
         user_instruction = state.global_instruction
 
-        # For no_plan mode: max_inner_rounds=1 (no memory, single turn)
-        max_rounds = 2
+        max_rounds = 2 if state.config.use_memory else 1
 
         res = self.planner_agent.run_refine(
             image_paths=planner_images,
@@ -625,24 +549,19 @@ class ServerTaskManager:
                 result_plan_list=res.plan_text or "",
                 result_summary=res.summary or "",
                 raw_output=res.raw_xml or "",
-                memory_operations=[],  # No memory in no_plan mode
+                    memory_operations=[op.__dict__ for op in res.memory_operations] if res.memory_operations else [],
             )
 
-        # For no_plan mode, use ablation logic to extract subtask
-        from src.server.ablation_logic import apply_planner_result_to_state, should_task_be_done
+        state.plan_list = (res.plan_text or "").strip()
+        state.summary = (res.summary or "").strip()
 
-        apply_planner_result_to_state(state, res, ablation)
-
-        # Check if task is complete
-        if should_task_be_done(state, ablation):
+        if is_plan_done(state.plan_list):
             state.is_done = True
             new_sub_desc = None
             state.current_subtask_description = None
             print(f"[TaskManager] Task marked as complete")
         else:
-            # Extract current subtask from state (set by apply_planner_result_to_state)
-            from src.server.ablation_logic import extract_current_subtask_description
-            new_sub_desc = extract_current_subtask_description(state, ablation)
+            new_sub_desc = extract_current_subtask(state.plan_list)
             state.current_subtask_description = new_sub_desc
             print(f"[TaskManager] Next subtask: {new_sub_desc}")
 
@@ -669,10 +588,6 @@ class ServerTaskManager:
             - If plan is done or no subtask: mark done + IDLE.
             - Else: extract current subtask from new plan_list and continue OBSERVING.
         """
-        from src.server.ablation_logic import get_ablation_config
-
-        ablation = get_ablation_config()
-
         start = state.current_subtask_start_idx
         end = len(state.image_paths)
         segment = state.image_paths[start:end] if end > start else []
@@ -685,8 +600,8 @@ class ServerTaskManager:
             is_first_round=False,
         )
 
-        # Determine max_inner_rounds based on memory usage
-        max_rounds = 2 if ablation.use_memory else 1
+        # Determine max_inner_rounds based on runtime config
+        max_rounds = 2 if state.config.use_memory else 1
 
         res = self.planner_agent.run_refine(
             image_paths=planner_images,

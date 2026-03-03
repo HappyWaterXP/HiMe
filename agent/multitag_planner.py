@@ -206,8 +206,8 @@ class PlannerAgent:
                             seen_record_ids.add(rec.id)
 
                             score = scores.get(rec.id, 0.0)
-                            data_type = rec.data.get("type")
-                            value = rec.data.get("value")
+                            data_type = rec.data_type
+                            value = rec.text
                             tags_str = ", ".join(rec.tags or [])
 
                             result_lines.append(
@@ -785,7 +785,8 @@ class PlannerAgent:
                         rec_copy = {
                             "id": rec.get("id"),
                             "tags": rec.get("tags"),
-                            "data": rec.get("data"),
+                            "data_type": rec.get("data_type"),
+                            "text": rec.get("text"),
                             "image_path": rec.get("image_path"),
                         }
                         light.append(rec_copy)
@@ -794,8 +795,8 @@ class PlannerAgent:
                 for rec in light:
                     rid = rec.get("id")
                     tags = ", ".join(rec.get("tags") or [])
-                    dtype = (rec.get("data") or {}).get("type")
-                    val = (rec.get("data") or {}).get("value")
+                    dtype = rec.get("data_type")
+                    val = rec.get("text")
                     preview = (str(val)[:180] + "...") if (val and len(str(val)) > 180) else (str(val) if val is not None else "")
                     print(f"- ID={rid} | Tags=[{tags}] | type={dtype} | value={preview} | image={rec.get('image_path')}")
                 print("==================================================\n")

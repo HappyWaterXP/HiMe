@@ -10,14 +10,14 @@
 - Returns a *clean* execution state to client (no internal-only fields).
 
 Usage:
-    uv run python -m uvicorn src.server.app:app --host 0.0.0.0 --port 8000 --reload
+    uv run uvicorn server.app:app --host 0.0.0.0 --port 8000 --reload
 """
 
 from __future__ import annotations
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from pydantic import BaseModel
-from typing import Optional, List, Union
+from typing import Optional, List
 from PIL import Image
 import io
 import os
@@ -26,6 +26,7 @@ import openai
 from .task_manager import ServerTaskManager
 from .schema import TaskConfig, TaskRuntimeState
 from .image_utils import RobotImageInput
+from .config import load_server_model_config
 # VLM client & agents
 from client.base_vlm_client import BaseVLMClient
 from client.planner_vlm import PlannerVLM
@@ -52,43 +53,26 @@ def init_agents_once() -> None:
     if task_manager.planner_agent is not None:
         return
 
-    # Load OpenAI config from env (set defaults for local dev)
-    os.environ.setdefault("OPENAI_API_KEY", "xx")
-    os.environ.setdefault("OPENAI_BASE_URL", "https://aigc.x-see.cn/v1")
-    client = openai.OpenAI()
+    cfg = load_server_model_config()
+    client = openai.OpenAI(
+        api_key=cfg.api_key,
+        base_url=cfg.base_url,
+    )
 
-    # Allow model to be configured via environment variable
-    model_name = os.environ.get("VLM_MODEL", "claude-sonnet-4-5-20250929")
-    # model_name = os.environ.get("VLM_MODEL", "gpt-4o-2024-08-06")
-    # model_name = os.environ.get("VLM_MODEL", "gpt-5-2025-08-07")
-
-    # Determine planner prompt based on ABLATION_STUDY environment variable
-    ablation_study = os.environ.get("ABLATION_STUDY", "baseline")
-    prompt_mapping = {
-        "baseline": "multitag_planner",
-        "no_plan": "multitag_planner_no_plan_no_memory",  # No observer, no memory, periodic trigger
-        "no_reasoning": "multitag_planner_no_reasoning",
-        "no_memory": "multitag_planner_no_memory",
-        "no_image": "multitag_planner_no_image",
-        "no_text": "multitag_planner_no_text",
-        "no_delete": "multitag_planner_no_delete",
-        "single_step": "multitag_planner_single_subtask",
-        "no_obs": "multitag_planner"  # With observer and memory
-    }
-    prompt_name = prompt_mapping.get(ablation_study, "multitag_planner")
-    print(f"[App] Using planner prompt: {prompt_name} (ABLATION_STUDY={ablation_study})")
+    prompt_name = os.environ.get("PLANNER_PROMPT_NAME", "multitag_planner").strip() or "multitag_planner"
+    print(f"[App] Using planner prompt: {prompt_name}")
+    print(
+        f"[App] Using planner model={cfg.planner_model}, "
+        f"observer model={cfg.observer_model}, base_url={cfg.base_url}"
+    )
 
     planner_client = BaseVLMClient(
-        model=model_name,
+        model=cfg.planner_model,
         client=client,
     )
-    observer_client = openai.OpenAI(
-        api_key='xx',
-        base_url="http://10.11.18.134:8000/v1",
-    )
     observer_base_client = BaseVLMClient(
-        model="Qwen/Qwen3-VL-8B-Instruct",
-        client=observer_client,
+        model=cfg.observer_model,
+        client=client,
     )
 
     # ✅ Create shared memory instance (persists across all tasks)
@@ -188,6 +172,8 @@ async def create_task(
     ),
     observer_window_size: int = Form(8),
     human_intervene_for_planner: bool = Form(False),
+    use_observer: bool = Form(True),
+    use_memory: bool = Form(True),
     # ✅ 控制是否重置 Planner 对话历史
     reset_planner_conversation: bool = Form(True, description="Whether to reset planner conversation history for new task (default: True). Set to False to preserve conversation context across tasks."),
 ):
@@ -220,13 +206,15 @@ async def create_task(
         raise HTTPException(status_code=400, detail=f"Invalid initial waist image: {e}")
 
     # ✅ Reset planner conversation if requested
-    if reset_planner_conversation:
+    if reset_planner_conversation and task_manager.planner_agent is not None:
         print(f"[App] 🔄 Resetting planner conversation history for new task")
         task_manager.planner_agent.reset()
 
     cfg = TaskConfig(
         observer_window_size=observer_window_size,
         human_intervene_for_planner=human_intervene_for_planner,
+        use_observer=use_observer,
+        use_memory=use_memory,
     )
 
     # RobotImageInput for create_task usually takes single images (start state)

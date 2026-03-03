@@ -65,17 +65,17 @@ def print_memory_state(memory: MultiTagMemory):
     
     for rec in memory.all():
         tags_str = ", ".join(rec.tags)
-        data_type = rec.data.get("type", "unknown")
+        data_type = rec.data_type
         
         print(f"ID: {rec.id}")
         print(f"  Tags: [{tags_str}]")
         print(f"  Type: {data_type}")
         
         if data_type == "text":
-            text = rec.data.get("value", "")
+            text = rec.text
             print(f"  Text: {text[:100]}..." if len(text) > 100 else f"  Text: {text}")
         elif data_type == "image":
-            desc = rec.data.get("value", "")
+            desc = rec.text
             img_path = rec.image_path
             print(f"  Description: {desc}")
             print(f"  Image: {img_path}")

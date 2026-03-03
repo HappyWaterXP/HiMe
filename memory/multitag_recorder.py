@@ -25,8 +25,8 @@ class MultiTagMemoryRecord:
     """
     id: int
     tags: List[str]
-    data_type: DataType = Literal["text", "image"]
     text: str
+    data_type: DataType
     text_embedding: Optional[List[float]] = None
     image_path: Optional[str] = None
 
@@ -204,7 +204,8 @@ class MultiTagMemory:
         self,
         tags: List[str],
         data_type: DataType,
-        text: srt,
+        text: Optional[str] = None,
+        data_value: Optional[str] = None,
         image_path: Optional[str] = None,
     ) -> MultiTagMemoryRecord:
         """
@@ -222,18 +223,20 @@ class MultiTagMemory:
         """
         rec_id = self._next_id
         self._next_id += 1
+        if text is None:
+            text = data_value or ""
 
         # ✅ 添加 tags（自动处理新 tag 的创建）
         self._increment_tag_refs(tags, rec_id)
 
         # 生成文本 embedding（每条记录单独存储）
-        txt_emb = self._encode_text(text) if text is not None else None
+        txt_emb = self._encode_text(text) if text else None
 
         record = MultiTagMemoryRecord(
             id=rec_id,
             tags=tags,
-            data_type=data_type,
             text=text,
+            data_type=data_type,
             text_embedding=txt_emb,
             image_path=image_path,
         )
@@ -691,7 +694,7 @@ class MultiTagMemory:
 
             # 生成 text_embedding
             text_embedding = None
-            if data_value is not None:
+            if text is not None:
                 text_embedding = encoder.encode_text(str(text))
 
             # 创建记录对象

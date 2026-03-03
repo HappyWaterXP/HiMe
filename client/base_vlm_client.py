@@ -1,5 +1,6 @@
 import base64
 import mimetypes
+import json
 from typing import List, Dict, Any, Optional
 
 import openai
@@ -57,6 +58,43 @@ class BaseVLMClient:
             },
         }
 
+    @staticmethod
+    def _extract_text_from_response(resp: Any) -> str:
+        """
+        Tolerant parser for OpenAI-compatible and non-standard providers.
+        """
+        # Some gateways may return raw text directly.
+        if isinstance(resp, str):
+            return resp
+
+        # Standard OpenAI SDK response object.
+        try:
+            return resp.choices[0].message.content or ""
+        except Exception:
+            pass
+
+        # Dict-like response from some compatible backends.
+        if isinstance(resp, dict):
+            choices = resp.get("choices") or []
+            if choices:
+                msg = choices[0].get("message") or {}
+                content = msg.get("content")
+                if isinstance(content, str):
+                    return content
+                if isinstance(content, list):
+                    text_parts: List[str] = []
+                    for part in content:
+                        if isinstance(part, dict) and part.get("type") == "text":
+                            text = part.get("text")
+                            if isinstance(text, str):
+                                text_parts.append(text)
+                    if text_parts:
+                        return "\n".join(text_parts)
+            return json.dumps(resp, ensure_ascii=False)
+
+        # Last-resort stringify to avoid crashing caller pipeline.
+        return str(resp)
+
     def chat(
         self,
         messages: List[Dict[str, Any]],
@@ -72,4 +110,4 @@ class BaseVLMClient:
             messages=messages,
             max_tokens=max_tokens,
         )
-        return resp.choices[0].message.content or ""
+        return self._extract_text_from_response(resp)

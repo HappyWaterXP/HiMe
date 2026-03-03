@@ -1,6 +1,6 @@
 from typing import List, Dict, Any
 
-from src.client.base_vlm_client import BaseVLMClient
+from client.base_vlm_client import BaseVLMClient
 
 
 class ObserverVLM:

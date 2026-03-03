@@ -82,10 +82,11 @@ def create_task(
     main_bytes = _pil_to_png_bytes(main_pil)
     files = {"initial_image": ("initial_image.png", io.BytesIO(main_bytes), "image/png")}
 
-    if initial_waist_image is not None:
-        waist_pil = _to_pil(initial_waist_image)
-        waist_bytes = _pil_to_png_bytes(waist_pil)
-        files["initial_waist_image"] = ("initial_waist_image.png", io.BytesIO(waist_bytes), "image/png")
+    # server currently requires waist image. If not provided, mirror main image.
+    waist_source = initial_waist_image if initial_waist_image is not None else initial_image
+    waist_pil = _to_pil(waist_source)
+    waist_bytes = _pil_to_png_bytes(waist_pil)
+    files["initial_waist_image"] = ("initial_waist_image.png", io.BytesIO(waist_bytes), "image/png")
 
     data = {
         "global_instruction": global_instruction,
@@ -110,10 +111,11 @@ def send_step(
     main_bytes = _pil_to_png_bytes(main_pil)
     files = {"image": ("step_image.png", io.BytesIO(main_bytes), "image/png")}
 
-    if waist_image is not None:
-        waist_pil = _to_pil(waist_image)
-        waist_bytes = _pil_to_png_bytes(waist_pil)
-        files["waist_image"] = ("waist_step_image.png", io.BytesIO(waist_bytes), "image/png")
+    # server currently requires waist image for each step.
+    waist_source = waist_image if waist_image is not None else image
+    waist_pil = _to_pil(waist_source)
+    waist_bytes = _pil_to_png_bytes(waist_pil)
+    files["waist_image"] = ("waist_step_image.png", io.BytesIO(waist_bytes), "image/png")
 
     resp = requests.post(url, files=files, timeout=timeout)
     resp.raise_for_status()

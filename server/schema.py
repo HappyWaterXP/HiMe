@@ -32,6 +32,11 @@ class TaskConfig:
     # （这里只控制"是否可能有人类介入"，但不再包含 debug / 审批流程）
     human_intervene_for_planner: bool = False
 
+    # Runtime switches for future extensions.
+    # Keep defaults on the baseline main path for maintainability.
+    use_observer: bool = True
+    use_memory: bool = True
+
 
 @dataclass
 class TaskRuntimeState:
