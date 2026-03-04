@@ -8,13 +8,21 @@ Defines:
 
 from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import List, Optional, Dict, Any, TYPE_CHECKING
+from enum import Enum
+from typing import List, Optional, Dict, Any, TYPE_CHECKING, Literal
 import time
 import os
 import uuid
 
 if TYPE_CHECKING:
     from server.round_logger import RoundLogger
+
+
+class TaskStateEnum(str, Enum):
+    OBSERVING = "observing"
+    PLANNER_RUNNING = "planner_running"
+    DONE = "done"
+    FAILED = "failed"
 
 
 @dataclass
@@ -36,6 +44,11 @@ class TaskConfig:
     # Keep defaults on the baseline main path for maintainability.
     use_observer: bool = True
     use_memory: bool = True
+
+    # Planner execution behavior:
+    # - sync: block request until planner returns
+    # - async: run planner in background for user-instruction refinement
+    planner_execution_mode: Literal["sync", "async"] = "sync"
 
 
 @dataclass
@@ -74,6 +87,7 @@ class TaskRuntimeState:
     plan_list: str = ""              # full multi-step plan
     summary: str = ""                # high-level summary
     is_done: bool = False            # whether entire task is done
+    runtime_state: TaskStateEnum = TaskStateEnum.OBSERVING
 
     # Current subtask description
     current_subtask_description: Optional[str] = None

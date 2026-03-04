@@ -14,11 +14,15 @@ Responsibilities:
 
 from __future__ import annotations
 
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, Any
+from concurrent.futures import ThreadPoolExecutor, Future
+from dataclasses import dataclass
+import threading
 
 from .schema import (
     TaskRuntimeState,
     TaskConfig,
+    TaskStateEnum,
 )
 from .task_state import create_initial_task_state, save_pil_to_dir
 from .image_utils import combine_two_pil_horizontally
@@ -36,6 +40,18 @@ PLANNER_PREFIX_EN = (
     "Based on the new input, update this plan list by adding, modifying, or marking items as completed as needed."
     "You must preserve previously completed tasks to reflect the full workflow, and your new plan must be an update of the previous plan, even when a new task arrives"
 )
+
+
+@dataclass
+class AsyncPlannerJob:
+    """Background planner job metadata."""
+    task_id: str
+    user_instruction: str
+    planner_images: List[str]
+    initial_plan_list: str
+    is_user_instruction_update: bool
+    target_global_instruction: Optional[str] = None
+    mode: str = "update_plan"  # "update_plan" | "direct_instruction"
 
 def build_planner_user_instruction(
     base_instruction: str,
@@ -104,6 +120,12 @@ class ServerTaskManager:
         self.planner_agent: Optional[PlannerAgent] = None
         self.observer_agent: Optional[ObserverAgent] = None
 
+        # Async planner infrastructure (used when task config mode == "async").
+        self._planner_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="planner-bg")
+        self._planner_jobs: Dict[str, Future] = {}
+        self._planner_job_meta: Dict[str, AsyncPlannerJob] = {}
+        self._planner_call_lock = threading.RLock()
+
     # ---------- Agent injection ----------
 
     def set_agents(self, planner: PlannerAgent, observer: ObserverAgent) -> None:
@@ -137,6 +159,10 @@ class ServerTaskManager:
 
         cfg = config or TaskConfig()
         state = create_initial_task_state(global_instruction, cfg)
+        state.extra.setdefault("planner_status", "idle")
+        state.extra.setdefault("planner_last_error", None)
+        state.extra.setdefault("needs_initial_instruction", cfg.planner_execution_mode == "async")
+        state.runtime_state = TaskStateEnum.PLANNER_RUNNING
 
         # Initialize round logger
         state.round_logger = RoundLogger(state.logs_dir)
@@ -175,17 +201,14 @@ class ServerTaskManager:
             drop_images_in_json=True,
         )
 
-        state.plan_list = (res.plan_text or "").strip()
-        state.summary = (res.summary or "").strip()
-
         # Log the initial planner interaction
         if state.round_logger:
             state.round_logger.add_planner_interaction(
                 image_paths=planner_images,
                 user_instruction=user_instruction,
                 initial_plan_list="",
-                result_plan_list=state.plan_list,
-                result_summary=state.summary,
+                result_plan_list=(res.plan_text or "").strip(),
+                result_summary=(res.summary or "").strip(),
                 raw_output=res.raw_xml or "",
                 memory_operations=[op.__dict__ for op in res.memory_operations] if res.memory_operations else [],
             )
@@ -193,22 +216,18 @@ class ServerTaskManager:
             state.round_logger.end_round()
 
         print(f"[TaskManager] First planner done")
-
-        if is_plan_done(state.plan_list):
-            state.is_done = True
-            state.current_subtask_description = None
+        self._apply_planner_result_to_task_state(
+            state,
+            plan_text=res.plan_text or "",
+            summary=res.summary or "",
+        )
+        if state.is_done:
             print(f"[TaskManager] Task already complete")
         else:
-            subtask_desc = extract_current_subtask(state.plan_list)
-            if subtask_desc:
-                state.current_subtask_description = subtask_desc
-                # current subtask image segment starts at the last appended index
-                state.current_subtask_start_idx = len(state.image_paths) - 1 if state.image_paths else 0
-                print(f"[TaskManager] Task initialized: subtask='{subtask_desc}', start_idx={state.current_subtask_start_idx}")
-            else:
-                state.is_done = True
-                state.current_subtask_description = None
-                print(f"[TaskManager] No subtask found, marking as done")
+            print(
+                f"[TaskManager] Task initialized: subtask='{state.current_subtask_description}', "
+                f"start_idx={state.current_subtask_start_idx}"
+            )
 
         self.tasks[state.task_id] = state
         print(f"[TaskManager] Task {state.task_id} created and stored")
@@ -237,6 +256,7 @@ class ServerTaskManager:
         assert self.observer_agent is not None
 
         state = self._get_task(task_id)
+        self._flush_async_planner_if_ready(state)
         
         # --- 1. Normalize Inputs to Lists ---
         # 无论由 create_task 传入单图，还是 step 传入 buffer，统一转为 list
@@ -276,12 +296,25 @@ class ServerTaskManager:
 
         if state.is_done:
             print(f"[TaskManager] Task already done, images stored.")
+            state.runtime_state = TaskStateEnum.DONE
+            return state
+
+        # Async bootstrap: first step must block until planner produces a runnable instruction.
+        if self._is_async_mode(state) and bool(state.extra.get("needs_initial_instruction", False)):
+            state.extra["needs_initial_instruction"] = False
+            print("[TaskManager] Async bootstrap step: waiting planner output to ensure runnable instruction.")
+            self._wait_for_running_async_planner(state)
+            if not state.is_done:
+                self._run_planner_refine_without_observer(state)
             return state
 
         # --- 3. Optional observer bypass ---
         if not state.config.use_observer:
             print(f"[TaskManager] Observer disabled, calling planner directly")
-            self._run_planner_refine_without_observer(state)
+            if self._is_async_mode(state):
+                self._schedule_async_plan_refresh(state, mode="direct_instruction")
+            else:
+                self._run_planner_refine_without_observer(state)
             return state
 
         # --- 4. STANDARD MODE: Run observer ---
@@ -334,14 +367,23 @@ class ServerTaskManager:
         # If observer says done
         if status == "done":
             print(f"[TaskManager] Observer says done, calling planner refine")
-            self._run_planner_refine_without_user_instruction(state)
+            if self._is_async_mode(state):
+                self._schedule_async_plan_refresh(state, mode="update_plan")
+            else:
+                self._run_planner_refine_without_user_instruction(state)
         
         # Stuck detection (check total steps in current subtask)
         # 注意：这里 full_segment 包含了刚刚加入的一整个 buffer，所以如果 buffer 很大，
         # 可能会立即触发 stuck 逻辑，这是符合预期的（动作太多了还没做完）
         elif len(full_segment) > 50:
-            print(f"[TaskManager] Task maybe stuck (segment len {len(full_segment)} > 10), calling planner refine")
-            self._run_planner_refine_without_user_instruction(state)
+            print(f"[TaskManager] Task maybe stuck (segment len {len(full_segment)} > 50), calling planner refine")
+            if self._is_async_mode(state):
+                self._schedule_async_plan_refresh(state, mode="update_plan")
+            else:
+                self._run_planner_refine_without_user_instruction(state)
+        else:
+            # Keep observing with current instruction.
+            state.runtime_state = TaskStateEnum.OBSERVING
 
         return state
 
@@ -367,20 +409,212 @@ class ServerTaskManager:
         assert self.planner_agent is not None
 
         state = self._get_task(task_id)
+        self._flush_async_planner_if_ready(state)
 
         # Allow refinement even if task is done - user may want to add more work
         # If task was done, we need to reactivate it
         if state.is_done:
             print(f"[TaskManager] Task was done, reactivating for user instruction")
             state.is_done = False
+            state.runtime_state = TaskStateEnum.OBSERVING
 
-        # ✅ Directly replace global_instruction
-        state.global_instruction = user_new_instruction.strip()
+        user_new_instruction = user_new_instruction.strip()
+        # User instruction must be blocking. If async planner is running, wait for it first.
+        self._wait_for_running_async_planner(state)
 
+        # Apply instruction immediately and block on planner.
+        state.global_instruction = user_new_instruction
         self._run_planner_refine_with_user_instruction(state)
         return state
 
     # ---------- Internal: image handling ----------
+
+    def _is_async_mode(self, state: TaskRuntimeState) -> bool:
+        return state.config.planner_execution_mode == "async"
+
+    def _planner_job_running(self, task_id: str) -> bool:
+        fut = self._planner_jobs.get(task_id)
+        return fut is not None and not fut.done()
+
+    def _collect_current_segment_images(self, state: TaskRuntimeState, max_n: int = 8) -> List[str]:
+        start = state.current_subtask_start_idx
+        end = len(state.image_paths)
+        segment = state.image_paths[start:end] if end > start else []
+        return sample_up_to_n_evenly(segment, max_n) if segment else []
+
+    def _call_planner_run_refine(
+        self,
+        *,
+        state: TaskRuntimeState,
+        planner_images: List[str],
+        user_instruction: str,
+        initial_plan_list: Optional[str],
+    ):
+        assert self.planner_agent is not None
+        max_rounds = 2 if state.config.use_memory else 1
+        with self._planner_call_lock:
+            return self.planner_agent.run_refine(
+                image_paths=planner_images,
+                initial_plan_list=initial_plan_list,
+                user_instruction=user_instruction,
+                max_tokens=4096,
+                max_inner_rounds=max_rounds,
+                do_reset=True,
+                print_full_interactions_each_round=False,
+                log_interactions_json_dir=state.logs_dir + "/interactions",
+                use_cli_prompt_for_memory_view=False,
+                decide_view_memory=None,
+                log_memory_json_dir=state.logs_dir + "/memory",
+                drop_images_in_json=True,
+            )
+
+    def _apply_planner_result_to_task_state(
+        self,
+        state: TaskRuntimeState,
+        *,
+        plan_text: str,
+        summary: str,
+    ) -> None:
+        state.plan_list = (plan_text or "").strip()
+        state.summary = (summary or "").strip()
+
+        if is_plan_done(state.plan_list):
+            state.is_done = True
+            state.current_subtask_description = None
+            state.runtime_state = TaskStateEnum.DONE
+            return
+
+        new_sub_desc = extract_current_subtask(state.plan_list)
+        if not new_sub_desc:
+            state.is_done = True
+            state.current_subtask_description = None
+            state.runtime_state = TaskStateEnum.DONE
+            return
+
+        state.is_done = False
+        state.runtime_state = TaskStateEnum.OBSERVING
+        state.current_subtask_description = new_sub_desc
+        state.current_subtask_start_idx = len(state.image_paths)
+
+    def _schedule_async_plan_refresh(
+        self,
+        state: TaskRuntimeState,
+        *,
+        mode: str,
+    ) -> None:
+        """
+        Queue planner refine triggered by observer/stuck/runtime flow.
+        mode:
+          - update_plan: update based on current plan + planner prefix
+          - direct_instruction: use global instruction directly
+        """
+        task_id = state.task_id
+        if self._planner_job_running(task_id):
+            # Observer/stuck/no-observer triggered refresh should NOT queue in async mode.
+            # Keep running with old instruction until current planner job finishes.
+            return
+
+        planner_images = self._collect_current_segment_images(state, max_n=8)
+        if mode == "direct_instruction":
+            user_instruction = state.global_instruction
+            initial_plan_list = state.plan_list
+        else:
+            user_instruction = build_planner_user_instruction(
+                base_instruction=state.global_instruction,
+                current_plan_list=state.plan_list,
+                is_first_round=False,
+            )
+            initial_plan_list = state.plan_list
+
+        job = AsyncPlannerJob(
+            task_id=task_id,
+            user_instruction=user_instruction,
+            planner_images=planner_images,
+            initial_plan_list=initial_plan_list,
+            is_user_instruction_update=False,
+            mode=mode,
+        )
+        self._submit_async_job(state, job)
+
+    def _submit_async_job(self, state: TaskRuntimeState, job: AsyncPlannerJob) -> None:
+        task_id = state.task_id
+
+        def _worker():
+            return self._call_planner_run_refine(
+                state=state,
+                planner_images=job.planner_images,
+                user_instruction=job.user_instruction,
+                initial_plan_list=job.initial_plan_list,
+            )
+
+        fut = self._planner_executor.submit(_worker)
+        self._planner_jobs[task_id] = fut
+        self._planner_job_meta[task_id] = job
+        state.extra["planner_status"] = "running"
+        state.extra["planner_last_error"] = None
+        state.runtime_state = TaskStateEnum.PLANNER_RUNNING
+
+    def _flush_async_planner_if_ready(self, state: TaskRuntimeState) -> None:
+        task_id = state.task_id
+        fut = self._planner_jobs.get(task_id)
+        if fut is None or not fut.done():
+            return
+
+        job = self._planner_job_meta.pop(task_id, None)
+        self._planner_jobs.pop(task_id, None)
+        if job is None:
+            return
+
+        try:
+            res = fut.result()
+        except Exception as e:
+            state.extra["planner_status"] = "failed"
+            state.extra["planner_last_error"] = str(e)
+            state.summary = f"Async planner failed: {e}"
+            state.runtime_state = TaskStateEnum.FAILED
+            return
+
+        if job.is_user_instruction_update and job.target_global_instruction:
+            state.global_instruction = job.target_global_instruction
+
+        if state.round_logger:
+            if not state.round_logger.current_round:
+                state.round_logger.start_round()
+            state.round_logger.add_planner_interaction(
+                image_paths=job.planner_images,
+                user_instruction=job.user_instruction,
+                initial_plan_list=job.initial_plan_list,
+                result_plan_list=res.plan_text or "",
+                result_summary=res.summary or "",
+                raw_output=res.raw_xml or "",
+                memory_operations=[op.__dict__ for op in res.memory_operations] if res.memory_operations else [],
+            )
+            state.round_logger.end_round()
+
+        self._apply_planner_result_to_task_state(
+            state,
+            plan_text=res.plan_text or "",
+            summary=res.summary or "",
+        )
+        state.extra["planner_status"] = "idle"
+        state.extra["planner_last_error"] = None
+
+    def _wait_for_running_async_planner(self, state: TaskRuntimeState) -> None:
+        """Block until current async planner job finishes, then flush result into state."""
+        task_id = state.task_id
+        fut = self._planner_jobs.get(task_id)
+        if fut is None:
+            return
+        if not fut.done():
+            try:
+                fut.result()
+            except Exception as e:
+                state.extra["planner_status"] = "failed"
+                state.extra["planner_last_error"] = str(e)
+                state.summary = f"Async planner failed: {e}"
+                state.runtime_state = TaskStateEnum.FAILED
+                raise
+        self._flush_async_planner_if_ready(state)
 
     def _save_robot_input_as_combined_image(
         self,
@@ -433,6 +667,7 @@ class ServerTaskManager:
 
         if state.is_done:
             return
+        state.runtime_state = TaskStateEnum.PLANNER_RUNNING
 
         # ---- collect segment images ----
         start = state.current_subtask_start_idx
@@ -477,22 +712,11 @@ class ServerTaskManager:
             )
             state.round_logger.end_round()
 
-        state.plan_list = (res.plan_text or "").strip()
-        state.summary = (res.summary or "").strip()
-
-        if is_plan_done(state.plan_list):
-            state.is_done = True
-            state.current_subtask_description = None
-            return
-
-        new_sub_desc = extract_current_subtask(state.plan_list)
-        if not new_sub_desc:
-            state.is_done = True
-            state.current_subtask_description = None
-            return
-
-        state.current_subtask_description = new_sub_desc
-        state.current_subtask_start_idx = len(state.image_paths)
+        self._apply_planner_result_to_task_state(
+            state,
+            plan_text=res.plan_text or "",
+            summary=res.summary or "",
+        )
 
     # ---------- Internal: planner refine without observer ----------
 
@@ -513,6 +737,7 @@ class ServerTaskManager:
         """
         if state.is_done:
             return
+        state.runtime_state = TaskStateEnum.PLANNER_RUNNING
 
         start = state.current_subtask_start_idx
         end = len(state.image_paths)
@@ -549,28 +774,23 @@ class ServerTaskManager:
                 result_plan_list=res.plan_text or "",
                 result_summary=res.summary or "",
                 raw_output=res.raw_xml or "",
-                    memory_operations=[op.__dict__ for op in res.memory_operations] if res.memory_operations else [],
+                memory_operations=[op.__dict__ for op in res.memory_operations] if res.memory_operations else [],
             )
 
-        state.plan_list = (res.plan_text or "").strip()
-        state.summary = (res.summary or "").strip()
-
-        if is_plan_done(state.plan_list):
-            state.is_done = True
-            new_sub_desc = None
-            state.current_subtask_description = None
+        self._apply_planner_result_to_task_state(
+            state,
+            plan_text=res.plan_text or "",
+            summary=res.summary or "",
+        )
+        new_sub_desc = state.current_subtask_description
+        if state.is_done:
             print(f"[TaskManager] Task marked as complete")
         else:
-            new_sub_desc = extract_current_subtask(state.plan_list)
-            state.current_subtask_description = new_sub_desc
             print(f"[TaskManager] Next subtask: {new_sub_desc}")
 
         # End round after planner completes
         if state.round_logger:
             state.round_logger.end_round()
-
-        state.current_subtask_description = new_sub_desc
-        state.current_subtask_start_idx = len(state.image_paths)
 
     # ---------- Internal: planner refine with user instruction ----------
 
@@ -589,6 +809,7 @@ class ServerTaskManager:
             - Else: extract current subtask from new plan_list and continue OBSERVING.
         """
         start = state.current_subtask_start_idx
+        state.runtime_state = TaskStateEnum.PLANNER_RUNNING
         end = len(state.image_paths)
         segment = state.image_paths[start:end] if end > start else []
         planner_images = sample_up_to_n_evenly(segment, 8) if segment else []
@@ -630,27 +851,11 @@ class ServerTaskManager:
                 memory_operations=[op.__dict__ for op in res.memory_operations] if res.memory_operations else [],
             )
 
-        plan_text = res.plan_text
-        summary = res.summary
-
-        state.plan_list = (plan_text or "").strip()
-        state.summary = (summary or "").strip()
-
-        if is_plan_done(state.plan_list):
-            state.is_done = True
-            state.current_subtask_description = None
-            return
-
-        new_sub_desc = extract_current_subtask(state.plan_list)
-        if not new_sub_desc:
-            state.is_done = True
-            state.current_subtask_description = None
-            return
-
-        # When plan structure may change significantly, we always just take
-        # "the current subtask" from the fresh plan_list.
-        state.current_subtask_description = new_sub_desc
-        state.current_subtask_start_idx = len(state.image_paths)
+        self._apply_planner_result_to_task_state(
+            state,
+            plan_text=res.plan_text or "",
+            summary=res.summary or "",
+        )
 
     # ---------- Internal: task lookup ----------
 

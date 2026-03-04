@@ -1,8 +1,18 @@
 #!/usr/bin/env python3
+"""Widow robot inference client.
+
+Startup Command:
+    uv run python widow/infer.py \
+        --task_server_base_url http://127.0.0.1:8000 \
+        --policy_host 192.168.1.103 \
+        --policy_port 8000 \
+        --policy_trace_npz_folder ./_policy_traces
+"""
 from __future__ import annotations
 
 import argparse
 import io
+import os
 import threading
 import time
 from dataclasses import dataclass
@@ -74,30 +84,28 @@ class RobotClient:
         self,
         global_instruction: str,
         initial_image,
-        initial_waist_image=None,
+        initial_waist_image,
     ) -> Dict[str, Any]:
         """POST /tasks: create task on server with initial images + instruction."""
         url = f"{self.base_url}/tasks"
 
         main_pil = self._to_pil(initial_image)
         main_bytes = self._pil_to_png_bytes(main_pil)
+        waist_pil = self._to_pil(initial_waist_image)
+        waist_bytes = self._pil_to_png_bytes(waist_pil)
 
         files = {
             "initial_image": (
                 "initial_image.png",
                 io.BytesIO(main_bytes),
                 "image/png",
-            )
-        }
-
-        if initial_waist_image is not None:
-            waist_pil = self._to_pil(initial_waist_image)
-            waist_bytes = self._pil_to_png_bytes(waist_pil)
-            files["initial_waist_image"] = (
+            ),
+            "initial_waist_image": (
                 "initial_waist_image.png",
                 io.BytesIO(waist_bytes),
                 "image/png",
-            )
+            ),
+        }
 
         data = {
             "global_instruction": global_instruction,
@@ -113,7 +121,7 @@ class RobotClient:
         self,
         task_id: str,
         images: List[Any],
-        waist_images: Optional[List[Any]] = None,
+        waist_images: List[Any],
     ) -> Dict[str, Any]:
         """
         POST /tasks/{task_id}/step: upload a SEQUENCE of observation images.
@@ -129,6 +137,12 @@ class RobotClient:
         # 1. Process Head Images
         if not images:
             raise ValueError("send_step called with empty image list")
+        if not waist_images:
+            raise ValueError("send_step called with empty waist image list")
+        if len(waist_images) != len(images):
+            raise ValueError(
+                f"waist image count ({len(waist_images)}) must equal head image count ({len(images)})"
+            )
 
         for idx, img in enumerate(images):
             pil_img = self._to_pil(img)
@@ -140,17 +154,13 @@ class RobotClient:
             ))
 
         # 2. Process Waist Images
-        if waist_images:
-            if len(waist_images) != len(images):
-                print(f"[Warn] Waist image count ({len(waist_images)}) != Head image count ({len(images)})")
-
-            for idx, img in enumerate(waist_images):
-                pil_img = self._to_pil(img)
-                img_bytes = self._pil_to_png_bytes(pil_img)
-                files.append((
-                    "waist_image",
-                    (f"waist_step_image_{idx}.png", io.BytesIO(img_bytes), "image/png")
-                ))
+        for idx, img in enumerate(waist_images):
+            pil_img = self._to_pil(img)
+            img_bytes = self._pil_to_png_bytes(pil_img)
+            files.append((
+                "waist_image",
+                (f"waist_step_image_{idx}.png", io.BytesIO(img_bytes), "image/png")
+            ))
 
         # Send request
         resp = requests.post(url, files=files, timeout=self.timeout)
@@ -226,6 +236,38 @@ def user_input_loop(
             print(f"\n[UserInput] ✗ Send failed: {e}\n")
 
 
+def save_policy_trace_npz(
+    output_root: str,
+    task_id: str,
+    head_image: np.ndarray,
+    wrist_image: np.ndarray,
+    state: np.ndarray,
+    task_text: str,
+    actions: Any,
+) -> Optional[str]:
+    """Save one policy request/response sample as compressed npz."""
+    if not output_root:
+        return None
+
+    task_dir = os.path.join(output_root, task_id)
+    os.makedirs(task_dir, exist_ok=True)
+
+    timestamp_ms = int(time.time() * 1000)
+    timestamp_ns_tail = time.time_ns() % 1_000_000
+    filename = f"{timestamp_ms}_{timestamp_ns_tail:06d}.npz"
+    save_path = os.path.join(task_dir, filename)
+
+    np.savez_compressed(
+        save_path,
+        image=head_image,
+        wrist_image=wrist_image,
+        state=np.asarray(state),
+        task=np.asarray(task_text),
+        action=np.asarray(actions),
+    )
+    return save_path
+
+
 # ==========================
 # Main logic
 # ==========================
@@ -260,6 +302,16 @@ def main():
     parser.add_argument("--task_server_timeout", type=int, default=180)
     parser.add_argument("--observer_window_size", type=int, default=8)
     parser.add_argument("--human_intervene_for_planner", action="store_true")
+    parser.add_argument(
+        "--policy_trace_npz_folder",
+        default="",
+        help="Default off. If provided, save policy trace npz under <folder>/<task_id>/<timestamp>.npz",
+    )
+    parser.add_argument(
+        "--policy_trace_npz_dir",
+        default="",
+        help="Deprecated alias of --policy_trace_npz_folder",
+    )
 
     args = parser.parse_args()
     dt = 1.0 / args.control_hz
@@ -328,6 +380,12 @@ def main():
     print("[Main] Task created:")
     print("  task_id:", task_id)
     print("  current_subtask:", init_resp.get("current_subtask_description"))
+
+    policy_trace_npz_dir = (args.policy_trace_npz_folder or args.policy_trace_npz_dir).strip()
+    if policy_trace_npz_dir:
+        task_npz_dir = os.path.join(policy_trace_npz_dir, task_id)
+        os.makedirs(task_npz_dir, exist_ok=True)
+        print(f"[Main] Policy trace npz enabled: {task_npz_dir}")
 
     # Current policy prompt
     current_policy_prompt = init_resp.get("current_subtask_description") or args.task_prompt
@@ -464,6 +522,20 @@ def main():
                             actions = result["actions"]
                         except Exception as e:
                             continue
+
+                        if policy_trace_npz_dir:
+                            try:
+                                save_policy_trace_npz(
+                                    output_root=policy_trace_npz_dir,
+                                    task_id=task_id,
+                                    head_image=head_img_p,
+                                    wrist_image=wrist_img_p,
+                                    state=input_state,
+                                    task_text=current_policy_prompt,
+                                    actions=actions,
+                                )
+                            except Exception as e:
+                                print(f"[Main] Failed to save policy trace npz: {e}")
 
                         # Execute actions
                         executed = 0

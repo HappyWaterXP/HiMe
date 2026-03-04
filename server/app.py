@@ -9,8 +9,16 @@
 - Delegates all task logic to ServerTaskManager.
 - Returns a *clean* execution state to client (no internal-only fields).
 
-Usage:
-    uv run uvicorn server.app:app --host 0.0.0.0 --port 8000 --reload
+Startup Commands:
+    1) Start app first:
+       uv run uvicorn server.app:app --host 0.0.0.0 --port 8000
+
+    2) Then start widow infer client:
+       uv run python widow/infer.py \
+           --task_server_base_url http://127.0.0.1:8000 \
+           --policy_host 192.168.1.103 \
+           --policy_port 8000 \
+           --policy_trace_npz_folder ./_policy_traces
 """
 
 from __future__ import annotations
@@ -24,7 +32,7 @@ import os
 import openai
 
 from .task_manager import ServerTaskManager
-from .schema import TaskConfig, TaskRuntimeState
+from .schema import TaskConfig, TaskRuntimeState, TaskStateEnum
 from .image_utils import RobotImageInput
 from .config import load_server_model_config
 # VLM client & agents
@@ -54,25 +62,31 @@ def init_agents_once() -> None:
         return
 
     cfg = load_server_model_config()
-    client = openai.OpenAI(
-        api_key=cfg.api_key,
-        base_url=cfg.base_url,
+    planner_openai_client = openai.OpenAI(
+        api_key=cfg.planner_api_key,
+        base_url=cfg.planner_base_url,
+    )
+    observer_openai_client = openai.OpenAI(
+        api_key=cfg.observer_api_key,
+        base_url=cfg.observer_base_url,
     )
 
     prompt_name = os.environ.get("PLANNER_PROMPT_NAME", "multitag_planner").strip() or "multitag_planner"
     print(f"[App] Using planner prompt: {prompt_name}")
     print(
-        f"[App] Using planner model={cfg.planner_model}, "
-        f"observer model={cfg.observer_model}, base_url={cfg.base_url}"
+        f"[App] Planner model={cfg.planner_model}, planner_base_url={cfg.planner_base_url}"
+    )
+    print(
+        f"[App] Observer model={cfg.observer_model}, observer_base_url={cfg.observer_base_url}"
     )
 
     planner_client = BaseVLMClient(
         model=cfg.planner_model,
-        client=client,
+        client=planner_openai_client,
     )
     observer_base_client = BaseVLMClient(
         model=cfg.observer_model,
-        client=client,
+        client=observer_openai_client,
     )
 
     # ✅ Create shared memory instance (persists across all tasks)
@@ -119,6 +133,8 @@ class TaskPublicState(BaseModel):
     """Minimal public view of a task runtime state for HTTP responses."""
     task_id: str
     is_done: bool
+    runtime_state: TaskStateEnum
+    planner_status: str
     plan_list: str
     summary: str
     current_subtask_description: Optional[str]
@@ -148,6 +164,8 @@ def state_to_public(state: TaskRuntimeState) -> TaskPublicState:
     return TaskPublicState(
         task_id=state.task_id,
         is_done=state.is_done,
+        runtime_state=state.runtime_state,
+        planner_status=str(state.extra.get("planner_status", "idle")),
         plan_list=state.plan_list,
         summary=state.summary,
         current_subtask_description=state.current_subtask_description,
@@ -174,6 +192,7 @@ async def create_task(
     human_intervene_for_planner: bool = Form(False),
     use_observer: bool = Form(True),
     use_memory: bool = Form(True),
+    planner_execution_mode: str = Form("sync"),
     # ✅ 控制是否重置 Planner 对话历史
     reset_planner_conversation: bool = Form(True, description="Whether to reset planner conversation history for new task (default: True). Set to False to preserve conversation context across tasks."),
 ):
@@ -210,11 +229,16 @@ async def create_task(
         print(f"[App] 🔄 Resetting planner conversation history for new task")
         task_manager.planner_agent.reset()
 
+    planner_execution_mode = (planner_execution_mode or "sync").strip().lower()
+    if planner_execution_mode not in {"sync", "async"}:
+        raise HTTPException(status_code=400, detail="planner_execution_mode must be 'sync' or 'async'")
+
     cfg = TaskConfig(
         observer_window_size=observer_window_size,
         human_intervene_for_planner=human_intervene_for_planner,
         use_observer=use_observer,
         use_memory=use_memory,
+        planner_execution_mode=planner_execution_mode,
     )
 
     # RobotImageInput for create_task usually takes single images (start state)
