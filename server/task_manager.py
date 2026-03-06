@@ -29,7 +29,6 @@ from .image_utils import combine_two_pil_horizontally
 from .round_logger import RoundLogger
 
 from agent.multitag_planner import PlannerAgent
-        # noqa
 from agent.observer import ObserverAgent
 from extractor import extract_current_subtask, is_plan_done
 
@@ -183,37 +182,22 @@ class ServerTaskManager:
             is_first_round=True,
         )
 
-        # Determine max_inner_rounds based on runtime config.
-        max_rounds = 2 if state.config.use_memory else 1
-
-        res = self.planner_agent.run_refine(
-            image_paths=planner_images,
-            initial_plan_list=None,
+        res = self._call_planner_run_refine(
+            state=state,
+            planner_images=planner_images,
             user_instruction=user_instruction,
-            max_tokens=4096,
-            max_inner_rounds=max_rounds,
-            do_reset=True,
-            print_full_interactions_each_round=False,
-            log_interactions_json_dir=state.logs_dir + "/interactions",
-            use_cli_prompt_for_memory_view=False,
-            decide_view_memory=None,
-            log_memory_json_dir=state.logs_dir + "/memory",
-            drop_images_in_json=True,
+            initial_plan_list=None,
         )
 
-        # Log the initial planner interaction
-        if state.round_logger:
-            state.round_logger.add_planner_interaction(
-                image_paths=planner_images,
-                user_instruction=user_instruction,
-                initial_plan_list="",
-                result_plan_list=(res.plan_text or "").strip(),
-                result_summary=(res.summary or "").strip(),
-                raw_output=res.raw_xml or "",
-                memory_operations=[op.__dict__ for op in res.memory_operations] if res.memory_operations else [],
-            )
-            # End first round and start observing
-            state.round_logger.end_round()
+        self._log_planner_interaction(
+            state=state,
+            planner_images=planner_images,
+            user_instruction=user_instruction,
+            initial_plan_list="",
+            planner_result=res,
+            ensure_round_started=False,
+            end_round=True,
+        )
 
         print(f"[TaskManager] First planner done")
         self._apply_planner_result_to_task_state(
@@ -468,6 +452,40 @@ class ServerTaskManager:
                 drop_images_in_json=True,
             )
 
+    @staticmethod
+    def _serialize_memory_operations(memory_operations: Any) -> List[Dict[str, Any]]:
+        if not memory_operations:
+            return []
+        return [op.__dict__ for op in memory_operations]
+
+    def _log_planner_interaction(
+        self,
+        *,
+        state: TaskRuntimeState,
+        planner_images: List[str],
+        user_instruction: str,
+        initial_plan_list: Optional[str],
+        planner_result: Any,
+        ensure_round_started: bool,
+        end_round: bool,
+    ) -> None:
+        if not state.round_logger:
+            return
+        if ensure_round_started and not state.round_logger.current_round:
+            state.round_logger.start_round()
+
+        state.round_logger.add_planner_interaction(
+            image_paths=planner_images,
+            user_instruction=user_instruction,
+            initial_plan_list=(initial_plan_list or ""),
+            result_plan_list=planner_result.plan_text or "",
+            result_summary=planner_result.summary or "",
+            raw_output=planner_result.raw_xml or "",
+            memory_operations=self._serialize_memory_operations(planner_result.memory_operations),
+        )
+        if end_round:
+            state.round_logger.end_round()
+
     def _apply_planner_result_to_task_state(
         self,
         state: TaskRuntimeState,
@@ -577,19 +595,15 @@ class ServerTaskManager:
         if job.is_user_instruction_update and job.target_global_instruction:
             state.global_instruction = job.target_global_instruction
 
-        if state.round_logger:
-            if not state.round_logger.current_round:
-                state.round_logger.start_round()
-            state.round_logger.add_planner_interaction(
-                image_paths=job.planner_images,
-                user_instruction=job.user_instruction,
-                initial_plan_list=job.initial_plan_list,
-                result_plan_list=res.plan_text or "",
-                result_summary=res.summary or "",
-                raw_output=res.raw_xml or "",
-                memory_operations=[op.__dict__ for op in res.memory_operations] if res.memory_operations else [],
-            )
-            state.round_logger.end_round()
+        self._log_planner_interaction(
+            state=state,
+            planner_images=job.planner_images,
+            user_instruction=job.user_instruction,
+            initial_plan_list=job.initial_plan_list,
+            planner_result=res,
+            ensure_round_started=True,
+            end_round=True,
+        )
 
         self._apply_planner_result_to_task_state(
             state,
@@ -669,48 +683,29 @@ class ServerTaskManager:
             return
         state.runtime_state = TaskStateEnum.PLANNER_RUNNING
 
-        # ---- collect segment images ----
-        start = state.current_subtask_start_idx
-        end = len(state.image_paths)
-        segment = state.image_paths[start:end] if end > start else []
-
-        planner_images = sample_up_to_n_evenly(segment, 8) if segment else []
+        planner_images = self._collect_current_segment_images(state, max_n=8)
         user_instruction = build_planner_user_instruction(
             base_instruction=state.global_instruction,
             current_plan_list=state.plan_list,
             is_first_round=False,
         )
         initial_plan_list = state.plan_list
-        max_rounds = 2 if state.config.use_memory else 1
-
-        # ---- call planner ----
-        res = self.planner_agent.run_refine(
-            image_paths=planner_images,
-            initial_plan_list=initial_plan_list,
+        res = self._call_planner_run_refine(
+            state=state,
+            planner_images=planner_images,
             user_instruction=user_instruction,
-            max_tokens=4096,
-            max_inner_rounds=max_rounds,
-            do_reset=True,
-            print_full_interactions_each_round=False,
-            log_interactions_json_dir=state.logs_dir + "/interactions",
-            use_cli_prompt_for_memory_view=False,
-            decide_view_memory=None,
-            log_memory_json_dir=state.logs_dir + "/memory",
-            drop_images_in_json=True,
+            initial_plan_list=initial_plan_list,
         )
 
-        # ---- logging ----
-        if state.round_logger:
-            state.round_logger.add_planner_interaction(
-                image_paths=planner_images,
-                user_instruction=user_instruction,
-                initial_plan_list=initial_plan_list or "",
-                result_plan_list=res.plan_text or "",
-                result_summary=res.summary or "",
-                raw_output=res.raw_xml or "",
-                memory_operations=[op.__dict__ for op in res.memory_operations] if res.memory_operations else [],
-            )
-            state.round_logger.end_round()
+        self._log_planner_interaction(
+            state=state,
+            planner_images=planner_images,
+            user_instruction=user_instruction,
+            initial_plan_list=initial_plan_list,
+            planner_result=res,
+            ensure_round_started=False,
+            end_round=True,
+        )
 
         self._apply_planner_result_to_task_state(
             state,
@@ -739,43 +734,26 @@ class ServerTaskManager:
             return
         state.runtime_state = TaskStateEnum.PLANNER_RUNNING
 
-        start = state.current_subtask_start_idx
-        end = len(state.image_paths)
-        segment = state.image_paths[start:end] if end > start else []
-        planner_images = sample_up_to_n_evenly(segment, 8) if segment else []
+        planner_images = self._collect_current_segment_images(state, max_n=8)
 
         user_instruction = state.global_instruction
 
-        max_rounds = 2 if state.config.use_memory else 1
-
-        res = self.planner_agent.run_refine(
-            image_paths=planner_images,
-            initial_plan_list=state.plan_list,
+        res = self._call_planner_run_refine(
+            state=state,
+            planner_images=planner_images,
             user_instruction=user_instruction,
-            max_tokens=4096,
-            max_inner_rounds=max_rounds,
-            do_reset=True,
-            print_full_interactions_each_round=False,
-            log_interactions_json_dir=state.logs_dir + "/interactions",
-            use_cli_prompt_for_memory_view=False,
-            decide_view_memory=None,
-            log_memory_json_dir=state.logs_dir + "/memory",
-            drop_images_in_json=True,
+            initial_plan_list=state.plan_list,
         )
 
-        # Log planner interaction
-        if state.round_logger:
-            if not state.round_logger.current_round:
-                state.round_logger.start_round()
-            state.round_logger.add_planner_interaction(
-                image_paths=planner_images,
-                user_instruction=user_instruction,
-                initial_plan_list=state.plan_list,
-                result_plan_list=res.plan_text or "",
-                result_summary=res.summary or "",
-                raw_output=res.raw_xml or "",
-                memory_operations=[op.__dict__ for op in res.memory_operations] if res.memory_operations else [],
-            )
+        self._log_planner_interaction(
+            state=state,
+            planner_images=planner_images,
+            user_instruction=user_instruction,
+            initial_plan_list=state.plan_list,
+            planner_result=res,
+            ensure_round_started=True,
+            end_round=False,
+        )
 
         self._apply_planner_result_to_task_state(
             state,
@@ -808,11 +786,8 @@ class ServerTaskManager:
             - If plan is done or no subtask: mark done + IDLE.
             - Else: extract current subtask from new plan_list and continue OBSERVING.
         """
-        start = state.current_subtask_start_idx
         state.runtime_state = TaskStateEnum.PLANNER_RUNNING
-        end = len(state.image_paths)
-        segment = state.image_paths[start:end] if end > start else []
-        planner_images = sample_up_to_n_evenly(segment, 8) if segment else []
+        planner_images = self._collect_current_segment_images(state, max_n=8)
 
         # Note: global_instruction has already been updated to the new instruction
         user_instruction = build_planner_user_instruction(
@@ -821,35 +796,22 @@ class ServerTaskManager:
             is_first_round=False,
         )
 
-        # Determine max_inner_rounds based on runtime config
-        max_rounds = 2 if state.config.use_memory else 1
-
-        res = self.planner_agent.run_refine(
-            image_paths=planner_images,
-            initial_plan_list=state.plan_list,
+        res = self._call_planner_run_refine(
+            state=state,
+            planner_images=planner_images,
             user_instruction=user_instruction,
-            max_tokens=4096,
-            max_inner_rounds=max_rounds,
-            do_reset=True,
-            print_full_interactions_each_round=False,
-            log_interactions_json_dir=state.logs_dir + "/interactions",
-            use_cli_prompt_for_memory_view=False,
-            decide_view_memory=None,
-            log_memory_json_dir=state.logs_dir + "/memory",
-            drop_images_in_json=True,
+            initial_plan_list=state.plan_list,
         )
 
-        # Log planner interaction
-        if state.round_logger:
-            state.round_logger.add_planner_interaction(
-                image_paths=planner_images,
-                user_instruction=user_instruction,
-                initial_plan_list=state.plan_list,
-                result_plan_list=res.plan_text or "",
-                result_summary=res.summary or "",
-                raw_output=res.raw_xml or "",
-                memory_operations=[op.__dict__ for op in res.memory_operations] if res.memory_operations else [],
-            )
+        self._log_planner_interaction(
+            state=state,
+            planner_images=planner_images,
+            user_instruction=user_instruction,
+            initial_plan_list=state.plan_list,
+            planner_result=res,
+            ensure_round_started=False,
+            end_round=False,
+        )
 
         self._apply_planner_result_to_task_state(
             state,
