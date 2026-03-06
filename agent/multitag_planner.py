@@ -94,6 +94,8 @@ class PlannerAgent:
 
         # ✅ 当前 refine 会话的原始输入图片路径列表
         self.current_input_image_paths: List[str] = []
+        # ✅ 当前 step 实际喂给模型的图片路径列表（Turn1 原图 / Turn2+ 查询附图）
+        self.current_turn_image_paths: List[str] = []
 
     # ---------- 状态操作 ----------
 
@@ -106,6 +108,7 @@ class PlannerAgent:
         self.last_query_results_text = ""
         self.last_query_image_paths = []
         self.current_input_image_paths = []
+        self.current_turn_image_paths = []
 
     def set_plan(self, plan_text: str) -> None:
         """人工指定当前全局最新计划"""
@@ -127,13 +130,21 @@ class PlannerAgent:
             return []
         
         indices = parse_image_indices(image_path_str)
+        source_paths = self.current_turn_image_paths
+        source_name = "current_turn_images"
+        if not source_paths:
+            source_paths = self.current_input_image_paths
+            source_name = "current_input_images"
         
         resolved_paths = []
         for idx in indices:
-            if 0 <= idx < len(self.current_input_image_paths):
-                resolved_paths.append(self.current_input_image_paths[idx])
+            if 0 <= idx < len(source_paths):
+                resolved_paths.append(source_paths[idx])
             else:
-                print(f"⚠️ Warning: Image index {idx+1} out of range (total: {len(self.current_input_image_paths)})")
+                print(
+                    f"⚠️ Warning: Image index {idx+1} out of range "
+                    f"(source={source_name}, total={len(source_paths)})."
+                )
         
         return resolved_paths
 
@@ -400,6 +411,7 @@ class PlannerAgent:
                 prompt_parts.append('💡 When creating/updating memory with images, use: image_path="1" or image_path="2,3"')
         else:
             prompt_parts.append("\nINPUT IMAGES: None")
+            prompt_parts.append("Do NOT output image_path when no images are provided.")
 
         prompt_parts.append("\n📋 REQUIRED OUTPUT FORMAT:")
 
@@ -421,7 +433,8 @@ class PlannerAgent:
     def _build_user_prompt_turn_n(
         self,
         turn_num: int,
-        query_results_text: str
+        query_results_text: str,
+        attachment_count: int = 0,
     ) -> str:
         """
         构建 Turn 2+ 的 User Prompt
@@ -442,9 +455,17 @@ class PlannerAgent:
                 prompt_parts.append("=== MEMORY QUERY RESULTS ===")
                 prompt_parts.append(query_results_text)
                 prompt_parts.append("\n📌 Note: Retrieved images (if any) are shown below this text.")
+                if attachment_count > 0:
+                    prompt_parts.append(
+                        f"Retrieved image attachments in this turn: {attachment_count}. "
+                        f"If needed, reference them with image_path=\"1..{attachment_count}\"."
+                    )
+                else:
+                    prompt_parts.append("No retrieved images in this turn. Do NOT output image_path.")
             else:
                 prompt_parts.append("=== NO MEMORY QUERIES PERFORMED ===")
                 prompt_parts.append("Previous operations completed without queries.")
+                prompt_parts.append("Do NOT output image_path in this turn.")
 
             prompt_parts.append("\n📋 NEXT STEPS:")
             prompt_parts.append("Based on the query results above, continue refining your plan and performing necessary memory operations.")
@@ -484,6 +505,7 @@ class PlannerAgent:
 
         query_attachments_to_attach = list(getattr(self, "last_query_image_attachments", []))
         self.last_query_image_attachments = []
+        turn_visible_image_paths: List[str] = []
 
         # ========== 1. 构建文本 Prompt ==========
         if turn_num == 1:
@@ -496,7 +518,8 @@ class PlannerAgent:
         else:
             user_text = self._build_user_prompt_turn_n(
                 turn_num=turn_num,
-                query_results_text=self.last_query_results_text
+                query_results_text=self.last_query_results_text,
+                attachment_count=len(query_attachments_to_attach),
             )
 
         # ========== 2. 组装 Content（文本 + 图像）==========
@@ -513,6 +536,7 @@ class PlannerAgent:
                         img_block.setdefault("meta", {})
                         img_block["meta"]["source_path"] = p
                     content.append(img_block)
+                    turn_visible_image_paths.append(p)
 
         # Turn 2+: 查询图片（文本锚定）
         if turn_num > 1 and query_attachments_to_attach:
@@ -538,12 +562,15 @@ class PlannerAgent:
                         img_block["meta"]["memory_image_ref"] = ref
                         img_block["meta"]["memory_referenced_by"] = rec_ids
                     content.append(img_block)
+                    turn_visible_image_paths.append(img_path)
                 else:
                     print(f"⚠️  Warning: Failed to encode query image, skipping: {img_path}")
 
 
         # ========== 3. 调用模型 ==========
         
+        # Keep the exact image list visible to the model in this step.
+        self.current_turn_image_paths = turn_visible_image_paths
         self.messages.append({"role": "user", "content": content})
         raw_xml = self.vlm.chat(messages=self.messages, max_tokens=max_tokens)
         self.messages.append({"role": "assistant", "content": raw_xml})

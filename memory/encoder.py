@@ -102,6 +102,8 @@ class OpenAIEmbeddingEncoder(BaseEncoder):
         self,
         embedding_dim: int = 3072,
         model: str = "text-embedding-3-large",
+        api_key: Optional[str] = None,
+        base_url: Optional[str] = None,
         api_key_env: str = "OPENAI_API_KEY",
         validate_dim: bool = True,
     ):
@@ -109,7 +111,8 @@ class OpenAIEmbeddingEncoder(BaseEncoder):
 
         self.model = model
         self.api_key_env = api_key_env
-        self.api_key: Optional[str] = os.getenv(api_key_env)
+        self.base_url = (base_url or "").strip() or None
+        self.api_key: Optional[str] = (api_key or "").strip() or os.getenv(api_key_env)
 
         if self.api_key is None:
             raise RuntimeError(
@@ -117,7 +120,7 @@ class OpenAIEmbeddingEncoder(BaseEncoder):
             )
 
         # OpenAI Python SDK client
-        self._client = OpenAI(api_key=self.api_key)
+        self._client = OpenAI(api_key=self.api_key, base_url=self.base_url)
 
         # If you want to enforce that server embedding size == self._embedding_dim,
         # you can keep validate_dim=True. Otherwise, we will truncate or pad.

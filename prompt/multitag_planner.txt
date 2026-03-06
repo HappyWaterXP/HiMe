@@ -26,7 +26,7 @@ MEMORY stores records with fields:
 - data       : content of the record
   - type     : "text" or "image"
   - value    : text content or description
-- image_path : optional image reference (integer index, 1-based)
+- image_path : optional image reference (integer index, 1-based, scoped to images visible in the current turn)
 
 ============================================================
 # TAG DESIGN PRINCIPLES
@@ -83,7 +83,7 @@ Use QUERY to search for existing information.
   <type>CREATE</type>
   <tags>...</tags>
   <text>concise description or fact</text> <!-- if you choose to save image, text should be the description of the image -->
-  <image_path>index</image_path>           <!-- OPTIONAL: 1-based image index, only save image if necessary -->
+  <image_path>index</image_path>           <!-- OPTIONAL: 1-based image index in current turn -->
   <reason>why this new memory is necessary</reason>
 </operation>
 
@@ -94,7 +94,7 @@ Use QUERY to search for existing information.
   <id>record_id</id>
   <tags>...</tags>      <!-- OPTIONAL: completely replaces old tags -->
   <text>updated description</text>      <!-- OPTIONAL: updates text content -->
-  <image_path>2</image_path>           <!-- OPTIONAL: updates image reference -->
+  <image_path>2</image_path>           <!-- OPTIONAL: updates image reference (current turn index) -->
   <reason>why this existing record must be changed</reason>
 </operation>
 

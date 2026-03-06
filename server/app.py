@@ -79,6 +79,9 @@ def init_agents_once() -> None:
     print(
         f"[App] Observer model={cfg.observer_model}, observer_base_url={cfg.observer_base_url}"
     )
+    print(
+        f"[App] Embedding model={cfg.embedding_model}, embedding_base_url={cfg.embedding_base_url}"
+    )
 
     planner_client = BaseVLMClient(
         model=cfg.planner_model,
@@ -93,20 +96,26 @@ def init_agents_once() -> None:
     # Check if we should resume memory from a file
     # memory_resume_path = os.environ.get("MEMORY_RESUME_PATH", "/Users/makabaka/code/mem_vla/_server_data/task_20260127_205643_df7e6dfa/logs/memory/memory_round_2_20260127_210037.json").strip()
     memory_resume_path = os.environ.get("MEMORY_RESUME_PATH", "").strip()
+    embedding_encoder = OpenAIEmbeddingEncoder(
+        model=cfg.embedding_model,
+        api_key=cfg.embedding_api_key,
+        base_url=cfg.embedding_base_url,
+    )
+
     if memory_resume_path and os.path.exists(memory_resume_path):
         print(f"[App] 📂 Resuming memory from: {memory_resume_path}")
         try:
             multitag_memory = MultiTagMemory.resume_from_json(
                 memory_resume_path,
-                OpenAIEmbeddingEncoder()
+                embedding_encoder,
             )
             print(f"[App] ✅ Memory resumed: {len(multitag_memory.all())} records loaded")
         except Exception as e:
             print(f"[App] ❌ Failed to resume memory: {e}")
             print(f"[App] ℹ️  Creating fresh memory instead")
-            multitag_memory = MultiTagMemory(OpenAIEmbeddingEncoder())
+            multitag_memory = MultiTagMemory(embedding_encoder)
     else:
-        multitag_memory = MultiTagMemory(OpenAIEmbeddingEncoder())
+        multitag_memory = MultiTagMemory(embedding_encoder)
         if memory_resume_path:
             print(f"[App] ⚠️  MEMORY_RESUME_PATH set but file not found: {memory_resume_path}")
         print(f"[App] ✅ Initialized fresh shared memory")
