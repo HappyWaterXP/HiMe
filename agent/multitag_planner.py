@@ -78,10 +78,12 @@ class PlannerAgent:
         self,
         vlm: PlannerVLM,
         memory: Optional[MultiTagMemory] = None,
-        prompt_name: str = "multitag_planner"
+        prompt_name: str = "multitag_planner",
+        memory_op_policy: str = "allow_all",
     ) -> None:
         self.vlm = vlm
         self.memory = memory
+        self.memory_op_policy = (memory_op_policy or "allow_all").strip().lower()
 
         self.system_prompt: str = load_prompt(prompt_name)
         self.messages: List[Dict[str, Any]] = [
@@ -179,6 +181,15 @@ class PlannerAgent:
             self.last_query_image_attachments = []
             return "No Existing Memory.\n"
 
+        allowed_by_policy = {
+            "allow_all": None,
+            "query_create_only": {"QUERY", "CREATE"},
+            "disable_all": set(),
+        }
+        allowed_ops = allowed_by_policy.get(self.memory_op_policy)
+        if allowed_ops is None and self.memory_op_policy not in allowed_by_policy:
+            print(f"⚠️ [Planner] Unknown memory_op_policy='{self.memory_op_policy}', fallback to allow_all.")
+
         result_lines: List[str] = []
 
         # 跨整个 operations 列表去重（跨多个 QUERY）
@@ -191,6 +202,9 @@ class PlannerAgent:
 
         for op in operations:
             t = (op.type or "").upper().strip()
+            if allowed_ops is not None and t not in allowed_ops:
+                print(f"⚠️ [Planner] SKIP {t}: blocked by memory_op_policy='{self.memory_op_policy}'")
+                continue
 
             # --- QUERY ---
             if t == "QUERY":

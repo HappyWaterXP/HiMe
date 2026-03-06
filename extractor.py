@@ -220,6 +220,32 @@ def parse_planner_output(xml_text: str) -> Dict[str, Any]:
     if plan_el is not None and plan_el.text:
         plan_text = plan_el.text.strip()
 
+    # ---------- 4. single-subtask fallback ----------
+    # Support prompts that output <subtask>/<is_complete> instead of <plan_list>.
+    if not plan_text:
+        subtask_el = root.find("subtask")
+        is_complete_el = root.find("is_complete")
+
+        subtask_text = ""
+        if subtask_el is not None and subtask_el.text:
+            subtask_text = subtask_el.text.strip()
+
+        is_complete_text = ""
+        if is_complete_el is not None and is_complete_el.text:
+            is_complete_text = is_complete_el.text.strip().lower()
+
+        if subtask_text or is_complete_text:
+            if is_complete_text in {"yes", "true", "done"}:
+                if subtask_text:
+                    plan_text = f"[done] {subtask_text}"
+                else:
+                    plan_text = "[done] task complete"
+            else:
+                if subtask_text:
+                    plan_text = f"[current] {subtask_text}"
+                else:
+                    plan_text = ""
+
     return {
         "summary": summary_text,
         "memory_operations": mem_ops,

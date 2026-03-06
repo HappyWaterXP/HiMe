@@ -35,6 +35,7 @@ from .task_manager import ServerTaskManager
 from .schema import TaskConfig, TaskRuntimeState, TaskStateEnum
 from .image_utils import RobotImageInput
 from .config import load_server_model_config
+from .ablation import load_ablation_setting
 # VLM client & agents
 from client.base_vlm_client import BaseVLMClient
 from client.planner_vlm import PlannerVLM
@@ -71,8 +72,12 @@ def init_agents_once() -> None:
         base_url=cfg.observer_base_url,
     )
 
-    prompt_name = os.environ.get("PLANNER_PROMPT_NAME", "multitag_planner").strip() or "multitag_planner"
+    ablation = load_ablation_setting()
+    prompt_name = os.environ.get("PLANNER_PROMPT_NAME", "").strip() or ablation.prompt_name
+    memory_op_policy = os.environ.get("PLANNER_MEMORY_OP_POLICY", "").strip() or ablation.memory_op_policy
+    print(f"[App] Ablation profile={ablation.profile}")
     print(f"[App] Using planner prompt: {prompt_name}")
+    print(f"[App] Planner memory_op_policy={memory_op_policy}")
     print(
         f"[App] Planner model={cfg.planner_model}, planner_base_url={cfg.planner_base_url}"
     )
@@ -123,7 +128,12 @@ def init_agents_once() -> None:
     planner_vlm = PlannerVLM(base_client=planner_client)
     observer_vlm = ObserverVLM(base_client=observer_base_client)
 
-    planner = PlannerAgent(vlm=planner_vlm, memory=multitag_memory, prompt_name=prompt_name)
+    planner = PlannerAgent(
+        vlm=planner_vlm,
+        memory=multitag_memory,
+        prompt_name=prompt_name,
+        memory_op_policy=memory_op_policy,
+    )
     observer = ObserverAgent(vlm=observer_vlm)
 
     task_manager.set_agents(planner, observer)
@@ -199,8 +209,8 @@ async def create_task(
     ),
     observer_window_size: int = Form(8),
     human_intervene_for_planner: bool = Form(False),
-    use_observer: bool = Form(True),
-    use_memory: bool = Form(True),
+    use_observer: Optional[bool] = Form(None),
+    use_memory: Optional[bool] = Form(None),
     planner_execution_mode: str = Form("sync"),
     # ✅ 控制是否重置 Planner 对话历史
     reset_planner_conversation: bool = Form(True, description="Whether to reset planner conversation history for new task (default: True). Set to False to preserve conversation context across tasks."),
@@ -242,11 +252,15 @@ async def create_task(
     if planner_execution_mode not in {"sync", "async"}:
         raise HTTPException(status_code=400, detail="planner_execution_mode must be 'sync' or 'async'")
 
+    ablation = load_ablation_setting()
+    effective_use_observer = ablation.use_observer if use_observer is None else use_observer
+    effective_use_memory = ablation.use_memory if use_memory is None else use_memory
+
     cfg = TaskConfig(
         observer_window_size=observer_window_size,
         human_intervene_for_planner=human_intervene_for_planner,
-        use_observer=use_observer,
-        use_memory=use_memory,
+        use_observer=effective_use_observer,
+        use_memory=effective_use_memory,
         planner_execution_mode=planner_execution_mode,
     )
 
