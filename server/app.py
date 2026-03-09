@@ -85,7 +85,7 @@ def init_agents_once() -> None:
         f"[App] Observer model={cfg.observer_model}, observer_base_url={cfg.observer_base_url}"
     )
     print(
-        f"[App] Embedding model={cfg.embedding_model}, embedding_base_url={cfg.embedding_base_url}"
+        f"[App] Embedding model={cfg.embedding_model}, embedding_base_url={cfg.embedding_base_url}, embedding_dim={cfg.embedding_dim}"
     )
 
     planner_client = BaseVLMClient(
@@ -102,6 +102,7 @@ def init_agents_once() -> None:
     # memory_resume_path = os.environ.get("MEMORY_RESUME_PATH", "/Users/makabaka/code/mem_vla/_server_data/task_20260127_205643_df7e6dfa/logs/memory/memory_round_2_20260127_210037.json").strip()
     memory_resume_path = os.environ.get("MEMORY_RESUME_PATH", "").strip()
     embedding_encoder = OpenAIEmbeddingEncoder(
+        embedding_dim=cfg.embedding_dim,
         model=cfg.embedding_model,
         api_key=cfg.embedding_api_key,
         base_url=cfg.embedding_base_url,

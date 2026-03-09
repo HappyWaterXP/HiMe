@@ -93,20 +93,21 @@ class OpenAIEmbeddingEncoder(BaseEncoder):
         - OPENAI_API_KEY (default), or a custom env name via api_key_env.
 
     Notes:
-        - text-embedding-3-large has 3072 dimensions. By default we set
-          embedding_dim=3072 to match it. If you pass a different dimension,
-          you must also set validate_dim=False or handle truncation/padding.
+        - embedding_dim=0 means auto-infer from the first successful API response.
+        - embedding_dim>0 means fixed target dimension.
     """
 
     def __init__(
         self,
-        embedding_dim: int = 3072,
+        embedding_dim: int = 0,
         model: str = "text-embedding-3-large",
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
         api_key_env: str = "OPENAI_API_KEY",
         validate_dim: bool = True,
     ):
+        if embedding_dim < 0:
+            raise ValueError("embedding_dim must be >= 0")
         super().__init__(embedding_dim)
 
         self.model = model
@@ -141,6 +142,11 @@ class OpenAIEmbeddingEncoder(BaseEncoder):
         dim = len(emb)
         if self._server_dim is None:
             self._server_dim = dim
+
+        # Auto mode: align internal dimension to server output on first success.
+        if self._embedding_dim == 0:
+            self._embedding_dim = dim
+            return emb
 
         if self._validate_dim:
             if dim != self._embedding_dim:

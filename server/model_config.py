@@ -27,3 +27,7 @@ OBSERVER_VLM_MODEL = ""
 EMBEDDING_OPENAI_API_KEY = ""
 EMBEDDING_OPENAI_BASE_URL = ""
 EMBEDDING_MODEL = "text-embedding-3-large"
+# Embedding vector dimension:
+# - 0: auto infer from embedding API response dimension (recommended)
+# - >0: enforce / normalize to fixed dimension
+EMBEDDING_DIM = 0

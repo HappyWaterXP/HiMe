@@ -17,6 +17,7 @@ class ServerModelConfig:
     embedding_api_key: str
     embedding_base_url: str
     embedding_model: str
+    embedding_dim: int
 
 
 def load_server_model_config() -> ServerModelConfig:
@@ -36,6 +37,20 @@ def load_server_model_config() -> ServerModelConfig:
         if py_clean:
             return py_clean
         return default
+
+    def int_env_or_py(env_name: str, py_val: object, default: int) -> int:
+        env_val = os.environ.get(env_name, "").strip()
+        if env_val:
+            try:
+                return int(env_val)
+            except Exception:
+                pass
+        try:
+            if py_val is not None and str(py_val).strip() != "":
+                return int(py_val)
+        except Exception:
+            pass
+        return int(default)
 
     shared_api_key = env_or_py("OPENAI_API_KEY", py_model_config.OPENAI_API_KEY, "xx")
     shared_base_url = env_or_py(
@@ -69,6 +84,7 @@ def load_server_model_config() -> ServerModelConfig:
     embedding_model = env_or_py(
         "EMBEDDING_MODEL", py_model_config.EMBEDDING_MODEL, "text-embedding-3-large"
     )
+    embedding_dim = int_env_or_py("EMBEDDING_DIM", getattr(py_model_config, "EMBEDDING_DIM", 0), 0)
 
     return ServerModelConfig(
         planner_api_key=planner_api_key,
@@ -80,4 +96,5 @@ def load_server_model_config() -> ServerModelConfig:
         embedding_api_key=embedding_api_key,
         embedding_base_url=embedding_base_url,
         embedding_model=embedding_model,
+        embedding_dim=embedding_dim,
     )

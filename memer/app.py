@@ -17,15 +17,17 @@ from pydantic import BaseModel
 from PIL import Image
 
 import openai
+from server.config import load_server_model_config
 
 # =========================================================
 # Config
 # =========================================================
-os.environ.setdefault("OPENAI_API_KEY", "xx")
-os.environ.setdefault("OPENAI_BASE_URL", "https://aigc.x-see.cn/v1")
-
-MODEL_NAME = os.environ.get("OPENAI_MODEL", "gpt-4o-2024-08-06")
-# MODEL_NAME = os.environ.get("VLM_MODEL", "claude-sonnet-4-5-20250929")
+SERVER_MODEL_CFG = load_server_model_config()
+MODEL_NAME = (
+    os.environ.get("MEMER_MODEL_NAME", "").strip()
+    or os.environ.get("OPENAI_MODEL", "").strip()
+    or SERVER_MODEL_CFG.planner_model
+)
 REQUEST_TIMEOUT_S = int(os.environ.get("MEMER_OPENAI_TIMEOUT_S", "180"))
 
 MERGE_DISTANCE_D = int(os.environ.get("MEMER_MERGE_DISTANCE_D", "5"))
@@ -40,8 +42,12 @@ SAVE_KEYFRAMES = os.environ.get("MEMER_SAVE_KEYFRAMES", "1") not in {"0", "false
 SAVE_RECENT_FRAMES = os.environ.get("MEMER_SAVE_RECENT_FRAMES", "0") in {"1", "true", "True"}
 LOG_JSONL = os.environ.get("MEMER_LOG_JSONL", "1") not in {"0", "false", "False"}
 
-client = openai.OpenAI()
+client = openai.OpenAI(
+    api_key=SERVER_MODEL_CFG.planner_api_key,
+    base_url=SERVER_MODEL_CFG.planner_base_url,
+)
 app = FastAPI(title="MemER Action Server (client-aligned)", version="4.0-client-aligned")
+print(f"[MemER] Model={MODEL_NAME}, base_url={SERVER_MODEL_CFG.planner_base_url}")
 
 # =========================================================
 # Global conversation history for memory retention
