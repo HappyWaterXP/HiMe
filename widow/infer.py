@@ -52,6 +52,7 @@ class RobotClientConfig:
     timeout: int = 180
     observer_window_size: int = 8
     human_intervene_for_planner: bool = False
+    planner_execution_mode: str = "sync"
 
 
 class RobotClient:
@@ -112,6 +113,7 @@ class RobotClient:
             "global_instruction": global_instruction,
             "observer_window_size": self.config.observer_window_size,
             "human_intervene_for_planner": self.config.human_intervene_for_planner,
+            "planner_execution_mode": self.config.planner_execution_mode,
         }
 
         resp = requests.post(url, files=files, data=data, timeout=self.timeout)
@@ -366,6 +368,12 @@ def main():
     parser.add_argument("--observer_window_size", type=int, default=8)
     parser.add_argument("--human_intervene_for_planner", action="store_true")
     parser.add_argument(
+        "--planner_execution_mode",
+        default="sync",
+        choices=["sync", "async"],
+        help="Planner execution mode on task server.",
+    )
+    parser.add_argument(
         "--policy_trace_npz_folder",
         default="",
         help="Default off. If provided, save policy trace npz under <folder>/<task_id>/<timestamp>.npz",
@@ -415,6 +423,7 @@ def main():
             timeout=args.task_server_timeout,
             observer_window_size=args.observer_window_size,
             human_intervene_for_planner=args.human_intervene_for_planner,
+            planner_execution_mode=args.planner_execution_mode,
         )
     )
 
