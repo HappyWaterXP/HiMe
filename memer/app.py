@@ -146,40 +146,43 @@ FRAMES: Dict[str, Dict[int, StoredCompositeFrame]] = {}
 SAVED_FRAME_IDS: Dict[str, set[int]] = {}
 
 # =========================================================
-# Global persistent keyframes for cross-task memory
+# Global history-memory keyframes loaded at startup
 # =========================================================
-# ✅ Store persistent keyframes that survive across all tasks
-# These keyframes will be prepended to every task's memory keyframes
-PERSISTENT_KEYFRAMES: Dict[int, StoredCompositeFrame] = {}
-PERSISTENT_KEYFRAME_IDS: List[int] = []
-NEXT_PERSISTENT_ID: int = -1  # Use negative IDs to avoid conflicts with task frame IDs
+# These are previous-memory keyframes and will be maintained together
+# with normal task keyframes in the same nomination/cluster/trim pipeline.
+HISTORY_MEMORY_KEYFRAMES: Dict[int, StoredCompositeFrame] = {}
+HISTORY_MEMORY_KEYFRAME_IDS: List[int] = []
+NEXT_HISTORY_MEMORY_ID: int = -1  # negative IDs avoid collision with task frame IDs
 
 
-def load_persistent_keyframes_on_startup():
+def load_history_memory_keyframes_on_startup():
     """
-    Load persistent keyframes (already composite) from directory on server startup.
+    Load previous-memory keyframes (already composite) from directory on startup.
 
     Environment variables:
-    - PERSISTENT_KEYFRAMES_DIR: Directory containing composite keyframe images
+    - MEMER_HISTORY_MEMORY_DIR: Directory containing composite keyframe images
+      (fallback: PERSISTENT_KEYFRAMES_DIR for backward compatibility)
       Expected structure:
         keyframes/
         ├── keyframe_000001.png  (composite image)
         ├── keyframe_000002.png
         └── keyframe_000003.png
     """
-    global NEXT_PERSISTENT_ID
+    global NEXT_HISTORY_MEMORY_ID
 
-    # keyframes_dir = os.environ.get("PERSISTENT_KEYFRAMES_DIR", "/Users/makabaka/code/mem_vla/memer_logs/task1_backup/keyframes").strip()
-    keyframes_dir = os.environ.get("PERSISTENT_KEYFRAMES_DIR", "").strip()
+    keyframes_dir = (
+        os.environ.get("MEMER_HISTORY_MEMORY_DIR", "").strip()
+        or os.environ.get("PERSISTENT_KEYFRAMES_DIR", "").strip()
+    )
     if not keyframes_dir:
-        print(f"[MemER] ℹ️  No PERSISTENT_KEYFRAMES_DIR set, starting with empty persistent memory")
+        print("[MemER] ℹ️  No history-memory dir set, starting with empty history memory")
         return
 
     if not os.path.exists(keyframes_dir):
-        print(f"[MemER] ⚠️  PERSISTENT_KEYFRAMES_DIR not found: {keyframes_dir}")
+        print(f"[MemER] ⚠️  History-memory dir not found: {keyframes_dir}")
         return
 
-    print(f"[MemER] 📂 Loading persistent keyframes from: {keyframes_dir}")
+    print(f"[MemER] 📂 Loading history-memory keyframes from: {keyframes_dir}")
 
     try:
         from pathlib import Path
@@ -200,28 +203,28 @@ def load_persistent_keyframes_on_startup():
                 composite_img = Image.open(composite_path).convert("RGB")
                 data_url = pil_to_data_url(composite_img)
 
-                # Store as persistent keyframe with negative ID
+                # Store as history-memory keyframe with negative ID
                 fr = StoredCompositeFrame(
-                    frame_id=NEXT_PERSISTENT_ID,
+                    frame_id=NEXT_HISTORY_MEMORY_ID,
                     ts_ms=now_ms(),
                     data_url=data_url,
-                    request_id="persistent_memory",
+                    request_id="history_memory",
                     local_pos_1idx=loaded_count + 1,
                 )
 
-                PERSISTENT_KEYFRAMES[NEXT_PERSISTENT_ID] = fr
-                PERSISTENT_KEYFRAME_IDS.append(NEXT_PERSISTENT_ID)
-                NEXT_PERSISTENT_ID -= 1
+                HISTORY_MEMORY_KEYFRAMES[NEXT_HISTORY_MEMORY_ID] = fr
+                HISTORY_MEMORY_KEYFRAME_IDS.append(NEXT_HISTORY_MEMORY_ID)
+                NEXT_HISTORY_MEMORY_ID -= 1
                 loaded_count += 1
 
             except Exception as e:
                 print(f"[MemER] ❌ Failed to load {composite_path.name}: {e}")
                 continue
 
-        print(f"[MemER] ✅ Loaded {loaded_count} persistent keyframes (cross-task memory enabled)")
+        print(f"[MemER] ✅ Loaded {loaded_count} history-memory keyframes")
 
     except Exception as e:
-        print(f"[MemER] ❌ Failed to load persistent keyframes: {e}")
+        print(f"[MemER] ❌ Failed to load history-memory keyframes: {e}")
 
 
 # =========================================================
@@ -371,10 +374,10 @@ async def upload_to_pil_rgb(f: UploadFile) -> Image.Image:
     return Image.open(io.BytesIO(data)).convert("RGB")
 
 # =========================================================
-# Load persistent keyframes on module import (server startup)
+# Load history-memory keyframes on module import (server startup)
 # =========================================================
-load_persistent_keyframes_on_startup()
-print(f"[MemER] ✅ Persistent memory initialized: {len(PERSISTENT_KEYFRAME_IDS)} keyframes")
+load_history_memory_keyframes_on_startup()
+print(f"[MemER] ✅ History memory initialized: {len(HISTORY_MEMORY_KEYFRAME_IDS)} keyframes")
 
 # =========================================================
 # MemER helpers
@@ -400,6 +403,16 @@ def rebuild_clusters_and_selected(nominated_indices: List[int], d: int) -> Tuple
 
 def trim_recent_keyframes(ids: List[int], max_k: int) -> List[int]:
     return ids if len(ids) <= max_k else ids[-max_k:]
+
+
+def recompute_selected_keyframes(ts: TaskState) -> List[int]:
+    """
+    Recompute clusters and selected keyframes from nominations.
+    Returns selected positive IDs for optional local file save.
+    """
+    ts.clusters, selected_ids = rebuild_clusters_and_selected(ts.nominated_indices, MERGE_DISTANCE_D)
+    ts.selected_keyframe_ids = trim_recent_keyframes(selected_ids, MAX_KEYFRAMES)
+    return [fid for fid in ts.selected_keyframe_ids if fid > 0]
 
 # =========================================================
 # Prompting (pure text action)
@@ -519,8 +532,8 @@ async def create_task(
     - initial_waist_image, initial_image: 第一帧（必需）
 
     关键帧初始化：
-    - 如果服务器启动时设置了 PERSISTENT_KEYFRAMES_DIR，预加载的关键帧会自动作为初始关键帧序列
-    - 之后的 MemER 逻辑会继续更新这个序列
+    - 如果服务器启动时设置了 MEMER_HISTORY_MEMORY_DIR（兼容旧变量 PERSISTENT_KEYFRAMES_DIR），
+      会预加载“历史 memory 关键帧”并纳入统一关键帧维护流程
     """
     task_id = str(uuid.uuid4())
 
@@ -532,23 +545,24 @@ async def create_task(
         raise HTTPException(status_code=400, detail=f"Invalid initial image(s): {e}")
 
     # Init task state
-    # ✅ 初始关键帧序列 = 预加载的 persistent keyframes
     ts = TaskState(
         task_id=task_id,
         global_instruction=global_instruction,
         observer_window_size=observer_window_size,
         next_frame_id=1,
-        nominated_indices=[],
+        nominated_indices=HISTORY_MEMORY_KEYFRAME_IDS.copy(),
         clusters=[],
-        selected_keyframe_ids=PERSISTENT_KEYFRAME_IDS.copy(),  # 直接使用预加载的关键帧
+        selected_keyframe_ids=[],
         current_subtask_description="",
         is_done=False,
     )
     TASKS[task_id] = ts
     FRAMES[task_id] = {}
 
-    if PERSISTENT_KEYFRAME_IDS:
-        print(f"[Task {task_id}] Initialized with {len(PERSISTENT_KEYFRAME_IDS)} persistent keyframes")
+    if HISTORY_MEMORY_KEYFRAME_IDS:
+        print(f"[Task {task_id}] Initialized with {len(HISTORY_MEMORY_KEYFRAME_IDS)} history-memory keyframes")
+
+    recompute_selected_keyframes(ts)
 
     # Store first composite frame
     request_id = str(uuid.uuid4())
@@ -568,11 +582,11 @@ async def create_task(
     # Call VLM immediately with K=1 (recent frame) + keyframes
     system_text, user_text = build_messages_for_action(ts.global_instruction)
 
-    # ✅ 使用当前的关键帧序列（包含预加载的）
+    # Use current keyframe sequence (history memory + task frames).
     keyframe_data_urls = []
     for fid in ts.selected_keyframe_ids:
-        if fid in PERSISTENT_KEYFRAMES:
-            keyframe_data_urls.append(PERSISTENT_KEYFRAMES[fid].data_url)
+        if fid in HISTORY_MEMORY_KEYFRAMES:
+            keyframe_data_urls.append(HISTORY_MEMORY_KEYFRAMES[fid].data_url)
         elif fid in FRAMES[task_id]:
             keyframe_data_urls.append(FRAMES[task_id][fid].data_url)
 
@@ -590,7 +604,7 @@ async def create_task(
         "global_instruction": global_instruction,
         "observer_window_size": observer_window_size,
         "human_intervene_for_planner": human_intervene_for_planner,
-        "persistent_keyframe_count": len(PERSISTENT_KEYFRAME_IDS),
+        "history_memory_keyframe_count": len(HISTORY_MEMORY_KEYFRAME_IDS),
         "model_debug": debug,
         "returned_action": action,
         "returned_keyframe_positions": keyframe_positions,
@@ -665,11 +679,11 @@ async def step(
     recent_global = all_frames_sorted[-RECENT_MAX:]
     recent_data_urls = [fr.data_url for fr in recent_global]
 
-    # ✅ 使用当前的关键帧序列（包含预加载的）
+    # Use current keyframe sequence (history memory + task frames).
     keyframe_data_urls = []
     for fid in ts.selected_keyframe_ids:
-        if fid in PERSISTENT_KEYFRAMES:
-            keyframe_data_urls.append(PERSISTENT_KEYFRAMES[fid].data_url)
+        if fid in HISTORY_MEMORY_KEYFRAMES:
+            keyframe_data_urls.append(HISTORY_MEMORY_KEYFRAMES[fid].data_url)
         elif fid in FRAMES[task_id]:
             keyframe_data_urls.append(FRAMES[task_id][fid].data_url)
 
@@ -692,14 +706,9 @@ async def step(
     ts.nominated_indices.extend(nominated_global_ids)
     ts.nominated_indices = sorted(set(ts.nominated_indices))
 
-    # ✅ Clustering 只处理任务中产生的帧（正数 ID）
-    ts.clusters, clustered_ids = rebuild_clusters_and_selected(ts.nominated_indices, MERGE_DISTANCE_D)
-    clustered_ids = trim_recent_keyframes(clustered_ids, MAX_KEYFRAMES)
-
-    # ✅ 保留预加载的关键帧 + 聚类后的关键帧
-    ts.selected_keyframe_ids = PERSISTENT_KEYFRAME_IDS.copy() + clustered_ids
-
-    saved_paths = maybe_save_keyframes(task_id, clustered_ids)  # 只保存任务产生的帧
+    # Unified maintenance pipeline for all keyframes
+    selected_positive_ids = recompute_selected_keyframes(ts)
+    saved_paths = maybe_save_keyframes(task_id, selected_positive_ids)
 
     append_jsonl(task_id, {
         "event": "step",
@@ -710,8 +719,8 @@ async def step(
         "returned_action": action,
         "returned_keyframe_positions": keyframe_positions,
         "nominated_global_ids": nominated_global_ids,
-        "clustered_keyframe_ids": clustered_ids,  # 任务产生的关键帧
-        "selected_keyframe_ids": ts.selected_keyframe_ids,  # persistent + clustered
+        "clustered_keyframe_ids": ts.selected_keyframe_ids,
+        "selected_keyframe_ids": ts.selected_keyframe_ids,
         "saved_keyframe_paths": saved_paths,
     })
 

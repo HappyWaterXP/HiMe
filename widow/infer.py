@@ -16,6 +16,7 @@ import os
 import threading
 import time
 from dataclasses import dataclass
+from queue import Empty, Full, Queue
 from typing import Optional, Dict, Any, List
 
 import numpy as np
@@ -242,7 +243,7 @@ def save_policy_trace_npz(
     head_image: np.ndarray,
     wrist_image: np.ndarray,
     state: np.ndarray,
-    task_text: str,
+    task_description: str,
     actions: Any,
 ) -> Optional[str]:
     """Save one policy request/response sample as compressed npz."""
@@ -259,13 +260,75 @@ def save_policy_trace_npz(
 
     np.savez_compressed(
         save_path,
+        task_description=np.asarray(task_description),
         image=head_image,
         wrist_image=wrist_image,
         state=np.asarray(state),
-        task=np.asarray(task_text),
         action=np.asarray(actions),
     )
     return save_path
+
+
+class AsyncPolicyTraceWriter:
+    """Best-effort async writer to avoid blocking policy/action loop on disk I/O."""
+
+    def __init__(self, output_root: str, task_id: str, max_queue: int = 256):
+        self.output_root = output_root
+        self.task_id = task_id
+        self._queue: "Queue[Dict[str, Any]]" = Queue(maxsize=max_queue)
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._dropped = 0
+        self._thread.start()
+
+    def enqueue(
+        self,
+        head_image: np.ndarray,
+        wrist_image: np.ndarray,
+        state: np.ndarray,
+        task_description: str,
+        actions: Any,
+    ) -> None:
+        item = {
+            "head_image": head_image,
+            "wrist_image": wrist_image,
+            "state": state,
+            "task_description": task_description,
+            "actions": actions,
+        }
+        try:
+            self._queue.put_nowait(item)
+        except Full:
+            self._dropped += 1
+            if self._dropped % 20 == 1:
+                print(
+                    f"[Main] Policy trace queue full, dropped {self._dropped} samples"
+                )
+
+    def close(self, timeout_s: float = 2.0) -> None:
+        self._stop.set()
+        self._thread.join(timeout=timeout_s)
+
+    def _run(self) -> None:
+        while not self._stop.is_set() or not self._queue.empty():
+            try:
+                item = self._queue.get(timeout=0.2)
+            except Empty:
+                continue
+            try:
+                save_policy_trace_npz(
+                    output_root=self.output_root,
+                    task_id=self.task_id,
+                    head_image=item["head_image"],
+                    wrist_image=item["wrist_image"],
+                    state=item["state"],
+                    task_description=item["task_description"],
+                    actions=item["actions"],
+                )
+            except Exception as e:
+                print(f"[Main] Failed to save policy trace npz (async): {e}")
+            finally:
+                self._queue.task_done()
 
 
 # ==========================
@@ -386,6 +449,11 @@ def main():
         task_npz_dir = os.path.join(policy_trace_npz_dir, task_id)
         os.makedirs(task_npz_dir, exist_ok=True)
         print(f"[Main] Policy trace npz enabled: {task_npz_dir}")
+    trace_writer = (
+        AsyncPolicyTraceWriter(policy_trace_npz_dir, task_id)
+        if policy_trace_npz_dir
+        else None
+    )
 
     # Current policy prompt
     current_policy_prompt = init_resp.get("current_subtask_description") or args.task_prompt
@@ -523,19 +591,14 @@ def main():
                         except Exception as e:
                             continue
 
-                        if policy_trace_npz_dir:
-                            try:
-                                save_policy_trace_npz(
-                                    output_root=policy_trace_npz_dir,
-                                    task_id=task_id,
-                                    head_image=head_img_p,
-                                    wrist_image=wrist_img_p,
-                                    state=input_state,
-                                    task_text=current_policy_prompt,
-                                    actions=actions,
-                                )
-                            except Exception as e:
-                                print(f"[Main] Failed to save policy trace npz: {e}")
+                        if trace_writer is not None:
+                            trace_writer.enqueue(
+                                head_image=head_img_p,
+                                wrist_image=wrist_img_p,
+                                state=input_state,
+                                task_description=current_policy_prompt,
+                                actions=actions,
+                            )
 
                         # Execute actions
                         executed = 0
@@ -623,6 +686,8 @@ def main():
     finally:
         print("[Main] Stopping robot & closing resources...")
         stop_flag.set()
+        if trace_writer is not None:
+            trace_writer.close(timeout_s=2.0)
         try:
             robot.go_to_sleep()
         except Exception: pass
