@@ -52,34 +52,30 @@ def load_server_model_config() -> ServerModelConfig:
             pass
         return int(default)
 
-    shared_api_key = env_or_py("OPENAI_API_KEY", py_model_config.OPENAI_API_KEY, "xx")
-    shared_base_url = env_or_py(
-        "OPENAI_BASE_URL", py_model_config.OPENAI_BASE_URL, "https://aigc.x-see.cn/v1"
-    )
-    shared_model = env_or_py("VLM_MODEL", py_model_config.VLM_MODEL, "qwen3-vl-30b-a3b-instruct")
-
     planner_api_key = env_or_py(
-        "PLANNER_OPENAI_API_KEY", py_model_config.PLANNER_OPENAI_API_KEY, shared_api_key
+        "PLANNER_OPENAI_API_KEY", py_model_config.PLANNER_OPENAI_API_KEY, "xx-planner"
     )
     planner_base_url = env_or_py(
-        "PLANNER_OPENAI_BASE_URL", py_model_config.PLANNER_OPENAI_BASE_URL, shared_base_url
+        "PLANNER_OPENAI_BASE_URL", py_model_config.PLANNER_OPENAI_BASE_URL, "https://planner.example.com/v1"
     )
-    planner_model = env_or_py("PLANNER_VLM_MODEL", py_model_config.PLANNER_VLM_MODEL, shared_model)
+    planner_model = env_or_py(
+        "PLANNER_VLM_MODEL", py_model_config.PLANNER_VLM_MODEL, "qwen3-vl-30b-a3b-instruct"
+    )
 
     observer_api_key = env_or_py(
-        "OBSERVER_OPENAI_API_KEY", py_model_config.OBSERVER_OPENAI_API_KEY, shared_api_key
+        "OBSERVER_OPENAI_API_KEY", py_model_config.OBSERVER_OPENAI_API_KEY, "xx-observer"
     )
     observer_base_url = env_or_py(
-        "OBSERVER_OPENAI_BASE_URL", py_model_config.OBSERVER_OPENAI_BASE_URL, shared_base_url
+        "OBSERVER_OPENAI_BASE_URL", py_model_config.OBSERVER_OPENAI_BASE_URL, "https://observer.example.com/v1"
     )
     observer_model = env_or_py(
-        "OBSERVER_VLM_MODEL", py_model_config.OBSERVER_VLM_MODEL, shared_model
+        "OBSERVER_VLM_MODEL", py_model_config.OBSERVER_VLM_MODEL, "qwen3-vl-8b-instruct"
     )
     embedding_api_key = env_or_py(
-        "EMBEDDING_OPENAI_API_KEY", py_model_config.EMBEDDING_OPENAI_API_KEY, shared_api_key
+        "EMBEDDING_OPENAI_API_KEY", py_model_config.EMBEDDING_OPENAI_API_KEY, "xx-embedding"
     )
     embedding_base_url = env_or_py(
-        "EMBEDDING_OPENAI_BASE_URL", py_model_config.EMBEDDING_OPENAI_BASE_URL, shared_base_url
+        "EMBEDDING_OPENAI_BASE_URL", py_model_config.EMBEDDING_OPENAI_BASE_URL, "https://embedding.example.com/v1"
     )
     embedding_model = env_or_py(
         "EMBEDDING_MODEL", py_model_config.EMBEDDING_MODEL, "text-embedding-3-large"

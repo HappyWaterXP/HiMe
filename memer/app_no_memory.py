@@ -17,28 +17,24 @@ from pydantic import BaseModel
 from PIL import Image
 
 import openai
-from server.config import load_server_model_config
 
 # =========================================================
 # Config
 # =========================================================
-SERVER_MODEL_CFG = load_server_model_config()
-MODEL_NAME = (
-    os.environ.get("MEMER_MODEL_NAME", "").strip()
-    or os.environ.get("OPENAI_MODEL", "").strip()
-    or SERVER_MODEL_CFG.planner_model
-)
+MEMER_API_KEY = os.environ.get("MEMER_OPENAI_API_KEY", "").strip() or "xx-memer"
+MEMER_BASE_URL = os.environ.get("MEMER_OPENAI_BASE_URL", "").strip() or "https://memer.example.com/v1"
+MODEL_NAME = os.environ.get("MEMER_MODEL_NAME", "").strip() or "qwen3-vl-30b-a3b-instruct"
 REQUEST_TIMEOUT_S = int(os.environ.get("MEMER_OPENAI_TIMEOUT_S", "180"))
 
 COMPOSITE_LAYOUT = os.environ.get("MEMER_COMPOSITE_LAYOUT", "horizontal").lower()
 COMPOSITE_MAX_SIDE = int(os.environ.get("MEMER_COMPOSITE_MAX_SIDE", "1024"))
 
 client = openai.OpenAI(
-    api_key=SERVER_MODEL_CFG.planner_api_key,
-    base_url=SERVER_MODEL_CFG.planner_base_url,
+    api_key=MEMER_API_KEY,
+    base_url=MEMER_BASE_URL,
 )
 app = FastAPI(title="MemER Action Server (no-keyframes)", version="1.0-no-keyframes")
-print(f"[MemER-no-memory] Model={MODEL_NAME}, base_url={SERVER_MODEL_CFG.planner_base_url}")
+print(f"[MemER-no-memory] Model={MODEL_NAME}, base_url={MEMER_BASE_URL}")
 
 # =========================================================
 # JSON extraction (tolerant)

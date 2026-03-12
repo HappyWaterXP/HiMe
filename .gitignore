@@ -6,3 +6,4 @@ _server_data
 .venv
 _*
 archive/
+env.sh

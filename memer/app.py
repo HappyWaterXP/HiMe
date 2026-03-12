@@ -10,6 +10,7 @@ import base64
 import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Tuple, Optional
+from pathlib import Path
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import JSONResponse
@@ -17,17 +18,13 @@ from pydantic import BaseModel
 from PIL import Image
 
 import openai
-from server.config import load_server_model_config
 
 # =========================================================
 # Config
 # =========================================================
-SERVER_MODEL_CFG = load_server_model_config()
-MODEL_NAME = (
-    os.environ.get("MEMER_MODEL_NAME", "").strip()
-    or os.environ.get("OPENAI_MODEL", "").strip()
-    or SERVER_MODEL_CFG.planner_model
-)
+MEMER_API_KEY = os.environ.get("MEMER_OPENAI_API_KEY", "").strip() or "xx-memer"
+MEMER_BASE_URL = os.environ.get("MEMER_OPENAI_BASE_URL", "").strip() or "https://memer.example.com/v1"
+MODEL_NAME = os.environ.get("MEMER_MODEL_NAME", "").strip() or "qwen3-vl-30b-a3b-instruct"
 REQUEST_TIMEOUT_S = int(os.environ.get("MEMER_OPENAI_TIMEOUT_S", "180"))
 
 MERGE_DISTANCE_D = int(os.environ.get("MEMER_MERGE_DISTANCE_D", "5"))
@@ -41,24 +38,14 @@ LOG_ROOT = os.environ.get("MEMER_LOG_ROOT", "./memer_logs")
 SAVE_KEYFRAMES = os.environ.get("MEMER_SAVE_KEYFRAMES", "1") not in {"0", "false", "False"}
 SAVE_RECENT_FRAMES = os.environ.get("MEMER_SAVE_RECENT_FRAMES", "0") in {"1", "true", "True"}
 LOG_JSONL = os.environ.get("MEMER_LOG_JSONL", "1") not in {"0", "false", "False"}
+HISTORY_MEMORY_DIR = os.environ.get("MEMER_HISTORY_MEMORY_DIR", "").strip()
 
 client = openai.OpenAI(
-    api_key=SERVER_MODEL_CFG.planner_api_key,
-    base_url=SERVER_MODEL_CFG.planner_base_url,
+    api_key=MEMER_API_KEY,
+    base_url=MEMER_BASE_URL,
 )
 app = FastAPI(title="MemER Action Server (client-aligned)", version="4.0-client-aligned")
-print(f"[MemER] Model={MODEL_NAME}, base_url={SERVER_MODEL_CFG.planner_base_url}")
-
-# =========================================================
-# Global conversation history for memory retention
-# =========================================================
-# ✅ Store conversation history across tasks for memory continuity
-GLOBAL_CONVERSATION_HISTORY: List[Dict[str, Any]] = []
-ENABLE_CROSS_TASK_MEMORY = os.environ.get("MEMER_CROSS_TASK_MEMORY", "1") in {"1", "true", "True"}
-MAX_CONVERSATION_HISTORY = int(os.environ.get("MEMER_MAX_CONVERSATION_HISTORY", "20"))
-
-print(f"[MemER] Cross-task memory: {'Enabled' if ENABLE_CROSS_TASK_MEMORY else 'Disabled'}")
-print(f"[MemER] Max conversation history: {MAX_CONVERSATION_HISTORY} turns")
+print(f"[MemER] Model={MODEL_NAME}, base_url={MEMER_BASE_URL}")
 
 # =========================================================
 # JSON extraction (tolerant)
@@ -152,73 +139,98 @@ SAVED_FRAME_IDS: Dict[str, set[int]] = {}
 # with normal task keyframes in the same nomination/cluster/trim pipeline.
 HISTORY_MEMORY_KEYFRAMES: Dict[int, StoredCompositeFrame] = {}
 HISTORY_MEMORY_KEYFRAME_IDS: List[int] = []
-NEXT_HISTORY_MEMORY_ID: int = -1  # negative IDs avoid collision with task frame IDs
 
 
 def load_history_memory_keyframes_on_startup():
     """
-    Load previous-memory keyframes (already composite) from directory on startup.
+    Load previous-memory keyframes from interaction logs directory.
 
-    Environment variables:
-    - MEMER_HISTORY_MEMORY_DIR: Directory containing composite keyframe images
-      (fallback: PERSISTENT_KEYFRAMES_DIR for backward compatibility)
-      Expected structure:
-        keyframes/
-        ├── keyframe_000001.png  (composite image)
-        ├── keyframe_000002.png
-        └── keyframe_000003.png
+    Directory is controlled by MEMER_HISTORY_MEMORY_DIR.
+    It reads events.jsonl and uses saved image paths in:
+    - saved_keyframe_paths
     """
-    global NEXT_HISTORY_MEMORY_ID
-
-    keyframes_dir = (
-        os.environ.get("MEMER_HISTORY_MEMORY_DIR", "").strip()
-        or os.environ.get("PERSISTENT_KEYFRAMES_DIR", "").strip()
-    )
+    keyframes_dir = HISTORY_MEMORY_DIR
     if not keyframes_dir:
-        print("[MemER] ℹ️  No history-memory dir set, starting with empty history memory")
+        print("[MemER] ℹ️  MEMER_HISTORY_MEMORY_DIR is empty, start with no history memory")
         return
 
     if not os.path.exists(keyframes_dir):
         print(f"[MemER] ⚠️  History-memory dir not found: {keyframes_dir}")
         return
 
-    print(f"[MemER] 📂 Loading history-memory keyframes from: {keyframes_dir}")
+    print(f"[MemER] 📂 Loading history-memory keyframes from logs: {keyframes_dir}")
 
     try:
-        from pathlib import Path
+        keyframe_paths: List[str] = []
+        seen: set[str] = set()
+        # Recursively find interaction logs; only use currently active keyframes.
+        events_files = sorted(
+            Path(keyframes_dir).rglob("events.jsonl"),
+            key=lambda p: p.stat().st_mtime,
+        )
+        for events_file in events_files:
+            try:
+                with open(events_file, "r", encoding="utf-8") as f:
+                    lines = f.readlines()
+            except Exception:
+                continue
 
-        # Find composite keyframes
-        keyframes_path = Path(keyframes_dir)
-        composite_frames = sorted(keyframes_path.glob("keyframe_*.png"))
+            last_selected_ids: List[int] = []
+            for line in lines:
+                try:
+                    rec = json.loads(line)
+                except Exception:
+                    continue
+                if rec.get("event") != "step":
+                    continue
+                selected = rec.get("selected_keyframe_ids")
+                if not isinstance(selected, list):
+                    continue
+                parsed: List[int] = []
+                for x in selected:
+                    try:
+                        fid = int(x)
+                    except Exception:
+                        continue
+                    if fid > 0:
+                        parsed.append(fid)
+                last_selected_ids = parsed
 
-        if not composite_frames:
-            print(f"[MemER] ⚠️  No keyframe_*.png files found in {keyframes_dir}")
+            # Build paths from active frame IDs in the latest step snapshot.
+            for fid in last_selected_ids:
+                abs_path = str((events_file.parent / "keyframes" / f"keyframe_{fid:06d}.png").resolve())
+                if abs_path in seen:
+                    continue
+                seen.add(abs_path)
+                keyframe_paths.append(abs_path)
+
+        if not keyframe_paths:
+            print(f"[MemER] ⚠️  No keyframe paths found in events logs under: {keyframes_dir}")
             return
 
-        # Load composite images
         loaded_count = 0
-        for composite_path in composite_frames:
+        id_gap = max(MERGE_DISTANCE_D + 1, 1)
+        start_id = -len(keyframe_paths) * id_gap
+        for idx, p in enumerate(keyframe_paths):
             try:
-                # Load composite image directly
-                composite_img = Image.open(composite_path).convert("RGB")
+                composite_img = Image.open(p).convert("RGB")
                 data_url = pil_to_data_url(composite_img)
+                frame_id = start_id + idx * id_gap
 
-                # Store as history-memory keyframe with negative ID
                 fr = StoredCompositeFrame(
-                    frame_id=NEXT_HISTORY_MEMORY_ID,
+                    frame_id=frame_id,
                     ts_ms=now_ms(),
                     data_url=data_url,
                     request_id="history_memory",
                     local_pos_1idx=loaded_count + 1,
                 )
 
-                HISTORY_MEMORY_KEYFRAMES[NEXT_HISTORY_MEMORY_ID] = fr
-                HISTORY_MEMORY_KEYFRAME_IDS.append(NEXT_HISTORY_MEMORY_ID)
-                NEXT_HISTORY_MEMORY_ID -= 1
+                HISTORY_MEMORY_KEYFRAMES[frame_id] = fr
+                HISTORY_MEMORY_KEYFRAME_IDS.append(frame_id)
                 loaded_count += 1
 
             except Exception as e:
-                print(f"[MemER] ❌ Failed to load {composite_path.name}: {e}")
+                print(f"[MemER] ❌ Failed to load history keyframe {p}: {e}")
                 continue
 
         print(f"[MemER] ✅ Loaded {loaded_count} history-memory keyframes")
@@ -315,6 +327,12 @@ def maybe_save_keyframes(task_id: str, keyframe_ids: List[int]) -> List[str]:
         saved_paths.append(path)
 
     return saved_paths
+
+
+def get_keyframe_frame(task_id: str, frame_id: int) -> Optional[StoredCompositeFrame]:
+    if frame_id in HISTORY_MEMORY_KEYFRAMES:
+        return HISTORY_MEMORY_KEYFRAMES[frame_id]
+    return FRAMES.get(task_id, {}).get(frame_id)
 
 # =========================================================
 # Image helpers
@@ -532,8 +550,8 @@ async def create_task(
     - initial_waist_image, initial_image: 第一帧（必需）
 
     关键帧初始化：
-    - 如果服务器启动时设置了 MEMER_HISTORY_MEMORY_DIR（兼容旧变量 PERSISTENT_KEYFRAMES_DIR），
-      会预加载“历史 memory 关键帧”并纳入统一关键帧维护流程
+    - MEMER_HISTORY_MEMORY_DIR 非空时，先加载历史 memory 关键帧
+    - 后续和新关键帧使用同一套维护流程
     """
     task_id = str(uuid.uuid4())
 
@@ -582,13 +600,11 @@ async def create_task(
     # Call VLM immediately with K=1 (recent frame) + keyframes
     system_text, user_text = build_messages_for_action(ts.global_instruction)
 
-    # Use current keyframe sequence (history memory + task frames).
     keyframe_data_urls = []
     for fid in ts.selected_keyframe_ids:
-        if fid in HISTORY_MEMORY_KEYFRAMES:
-            keyframe_data_urls.append(HISTORY_MEMORY_KEYFRAMES[fid].data_url)
-        elif fid in FRAMES[task_id]:
-            keyframe_data_urls.append(FRAMES[task_id][fid].data_url)
+        fr_mem = get_keyframe_frame(task_id, fid)
+        if fr_mem is not None:
+            keyframe_data_urls.append(fr_mem.data_url)
 
     action, keyframe_positions, debug = call_vlm_for_action(
         system_text=system_text,
@@ -679,13 +695,11 @@ async def step(
     recent_global = all_frames_sorted[-RECENT_MAX:]
     recent_data_urls = [fr.data_url for fr in recent_global]
 
-    # Use current keyframe sequence (history memory + task frames).
     keyframe_data_urls = []
     for fid in ts.selected_keyframe_ids:
-        if fid in HISTORY_MEMORY_KEYFRAMES:
-            keyframe_data_urls.append(HISTORY_MEMORY_KEYFRAMES[fid].data_url)
-        elif fid in FRAMES[task_id]:
-            keyframe_data_urls.append(FRAMES[task_id][fid].data_url)
+        fr_mem = get_keyframe_frame(task_id, fid)
+        if fr_mem is not None:
+            keyframe_data_urls.append(fr_mem.data_url)
 
     # Call VLM
     system_text, user_text = build_messages_for_action(ts.global_instruction)

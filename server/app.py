@@ -30,6 +30,7 @@ from PIL import Image
 import io
 import os
 import openai
+from pathlib import Path
 
 from .task_manager import ServerTaskManager
 from .schema import TaskConfig, TaskRuntimeState, TaskStateEnum
@@ -49,15 +50,37 @@ app = FastAPI()
 task_manager = ServerTaskManager()
 
 
+def load_memory_from_resume_dir(resume_dir: str, encoder: OpenAIEmbeddingEncoder) -> MultiTagMemory:
+    """
+    Resume memory from a task logs folder.
+    Source:
+    - latest memory snapshot under */memory/memory_round_*.json
+    """
+    base = Path(resume_dir)
+    if not base.exists():
+        raise FileNotFoundError(f"MEMORY_RESUME_DIR not found: {resume_dir}")
+
+    # Only load snapshots under */memory/
+    snapshot_files = sorted(
+        p for p in base.rglob("memory_round_*.json") if p.parent.name == "memory"
+    )
+    if not snapshot_files:
+        raise FileNotFoundError(
+            f"No memory snapshot found under {resume_dir} (expected */memory/memory_round_*.json)"
+        )
+    latest = snapshot_files[-1]
+    print(f"[App] 📂 Resuming memory from snapshot: {latest}")
+    return MultiTagMemory.resume_from_json(str(latest), encoder)
+
+
 def init_agents_once() -> None:
     """
     Initialize PlannerAgent and ObserverAgent once on startup,
     and inject them into the global task_manager.
 
-    ✅ Memory persistence:
+    Memory persistence:
     - Memory is created once and shared across all tasks
-    - If MEMORY_RESUME_PATH is set, memory will be auto-resumed on startup
-    - This enables cross-task knowledge retention
+    - Resume source: MEMORY_RESUME_DIR (task logs folder, memory snapshot files)
     """
     if task_manager.planner_agent is not None:
         return
@@ -97,10 +120,8 @@ def init_agents_once() -> None:
         client=observer_openai_client,
     )
 
-    # ✅ Create shared memory instance (persists across all tasks)
-    # Check if we should resume memory from a file
-    # memory_resume_path = os.environ.get("MEMORY_RESUME_PATH", "/Users/makabaka/code/mem_vla/_server_data/task_20260127_205643_df7e6dfa/logs/memory/memory_round_2_20260127_210037.json").strip()
-    memory_resume_path = os.environ.get("MEMORY_RESUME_PATH", "").strip()
+    # Shared memory instance (persisted across tasks during runtime)
+    memory_resume_dir = os.environ.get("MEMORY_RESUME_DIR", "").strip()
     embedding_encoder = OpenAIEmbeddingEncoder(
         embedding_dim=cfg.embedding_dim,
         model=cfg.embedding_model,
@@ -108,13 +129,9 @@ def init_agents_once() -> None:
         base_url=cfg.embedding_base_url,
     )
 
-    if memory_resume_path and os.path.exists(memory_resume_path):
-        print(f"[App] 📂 Resuming memory from: {memory_resume_path}")
+    if memory_resume_dir:
         try:
-            multitag_memory = MultiTagMemory.resume_from_json(
-                memory_resume_path,
-                embedding_encoder,
-            )
+            multitag_memory = load_memory_from_resume_dir(memory_resume_dir, embedding_encoder)
             print(f"[App] ✅ Memory resumed: {len(multitag_memory.all())} records loaded")
         except Exception as e:
             print(f"[App] ❌ Failed to resume memory: {e}")
@@ -122,8 +139,6 @@ def init_agents_once() -> None:
             multitag_memory = MultiTagMemory(embedding_encoder)
     else:
         multitag_memory = MultiTagMemory(embedding_encoder)
-        if memory_resume_path:
-            print(f"[App] ⚠️  MEMORY_RESUME_PATH set but file not found: {memory_resume_path}")
         print(f"[App] ✅ Initialized fresh shared memory")
 
     planner_vlm = PlannerVLM(base_client=planner_client)
@@ -228,7 +243,7 @@ async def create_task(
 
     Memory behavior:
     - Memory is shared globally across all tasks
-    - Memory can be pre-loaded on server startup via MEMORY_RESUME_PATH environment variable
+    - Memory can be pre-loaded on server startup via MEMORY_RESUME_DIR
     - If reset_planner_conversation=False, conversation context is also preserved
 
     Server will combine images into a single 'combined' image,

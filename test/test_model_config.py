@@ -41,9 +41,6 @@ def _temp_py_config(overrides):
 class ModelConfigPriorityTest(unittest.TestCase):
     def test_env_overrides_python_config(self):
         py_overrides = {
-            "OPENAI_API_KEY": "py-shared-key",
-            "OPENAI_BASE_URL": "https://py.shared/v1",
-            "VLM_MODEL": "py-shared-model",
             "PLANNER_OPENAI_API_KEY": "py-planner-key",
             "PLANNER_OPENAI_BASE_URL": "https://py.planner/v1",
             "PLANNER_VLM_MODEL": "py-planner-model",
@@ -55,9 +52,6 @@ class ModelConfigPriorityTest(unittest.TestCase):
             "EMBEDDING_MODEL": "py-emb-model",
         }
         env_overrides = {
-            "OPENAI_API_KEY": "env-shared-key",
-            "OPENAI_BASE_URL": "https://env.shared/v1",
-            "VLM_MODEL": "env-shared-model",
             "PLANNER_OPENAI_API_KEY": "env-planner-key",
             "PLANNER_OPENAI_BASE_URL": "https://env.planner/v1",
             "PLANNER_VLM_MODEL": "env-planner-model",
@@ -82,23 +76,17 @@ class ModelConfigPriorityTest(unittest.TestCase):
 
     def test_python_config_fallback_when_env_empty(self):
         py_overrides = {
-            "OPENAI_API_KEY": "py-shared-key",
-            "OPENAI_BASE_URL": "https://py.shared/v1",
-            "VLM_MODEL": "py-shared-model",
-            "PLANNER_OPENAI_API_KEY": "",
-            "PLANNER_OPENAI_BASE_URL": "",
-            "PLANNER_VLM_MODEL": "",
+            "PLANNER_OPENAI_API_KEY": "py-planner-key",
+            "PLANNER_OPENAI_BASE_URL": "https://py.planner/v1",
+            "PLANNER_VLM_MODEL": "py-planner-model",
             "OBSERVER_OPENAI_API_KEY": "py-observer-key",
-            "OBSERVER_OPENAI_BASE_URL": "",
-            "OBSERVER_VLM_MODEL": "",
-            "EMBEDDING_OPENAI_API_KEY": "",
+            "OBSERVER_OPENAI_BASE_URL": "https://py.observer/v1",
+            "OBSERVER_VLM_MODEL": "py-observer-model",
+            "EMBEDDING_OPENAI_API_KEY": "py-emb-key",
             "EMBEDDING_OPENAI_BASE_URL": "https://py.embedding/v1",
             "EMBEDDING_MODEL": "text-embedding-3-large",
         }
         env_clear = {
-            "OPENAI_API_KEY": None,
-            "OPENAI_BASE_URL": None,
-            "VLM_MODEL": None,
             "PLANNER_OPENAI_API_KEY": None,
             "PLANNER_OPENAI_BASE_URL": None,
             "PLANNER_VLM_MODEL": None,
@@ -111,13 +99,13 @@ class ModelConfigPriorityTest(unittest.TestCase):
         }
         with _temp_py_config(py_overrides), _temp_env(env_clear):
             cfg = load_server_model_config()
-            self.assertEqual(cfg.planner_api_key, "py-shared-key")
-            self.assertEqual(cfg.planner_base_url, "https://py.shared/v1")
-            self.assertEqual(cfg.planner_model, "py-shared-model")
+            self.assertEqual(cfg.planner_api_key, "py-planner-key")
+            self.assertEqual(cfg.planner_base_url, "https://py.planner/v1")
+            self.assertEqual(cfg.planner_model, "py-planner-model")
             self.assertEqual(cfg.observer_api_key, "py-observer-key")
-            self.assertEqual(cfg.observer_base_url, "https://py.shared/v1")
-            self.assertEqual(cfg.observer_model, "py-shared-model")
-            self.assertEqual(cfg.embedding_api_key, "py-shared-key")
+            self.assertEqual(cfg.observer_base_url, "https://py.observer/v1")
+            self.assertEqual(cfg.observer_model, "py-observer-model")
+            self.assertEqual(cfg.embedding_api_key, "py-emb-key")
             self.assertEqual(cfg.embedding_base_url, "https://py.embedding/v1")
             self.assertEqual(cfg.embedding_model, "text-embedding-3-large")
 

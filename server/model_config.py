@@ -8,24 +8,19 @@ Usage:
 - Restart `uvicorn server.app:app` to apply changes.
 """
 
-# Shared defaults (used when a section field is left empty)
-OPENAI_API_KEY = "xx"
-OPENAI_BASE_URL = "https://aigc.x-see.cn/v1"
-VLM_MODEL = "qwen3-vl-30b-a3b-instruct"
+# Planner (independent)
+PLANNER_OPENAI_API_KEY = "xx-planner"
+PLANNER_OPENAI_BASE_URL = "https://planner.example.com/v1"
+PLANNER_VLM_MODEL = "qwen3-vl-30b-a3b-instruct"
 
-# Planner (empty string means fallback to shared defaults above)
-PLANNER_OPENAI_API_KEY = ""
-PLANNER_OPENAI_BASE_URL = ""
-PLANNER_VLM_MODEL = ""
+# Observer (independent)
+OBSERVER_OPENAI_API_KEY = "xx-observer"
+OBSERVER_OPENAI_BASE_URL = "https://observer.example.com/v1"
+OBSERVER_VLM_MODEL = "qwen3-vl-8b-instruct"
 
-# Observer (empty string means fallback to shared defaults above)
-OBSERVER_OPENAI_API_KEY = ""
-OBSERVER_OPENAI_BASE_URL = ""
-OBSERVER_VLM_MODEL = ""
-
-# Embedding (empty string means fallback to shared defaults above)
-EMBEDDING_OPENAI_API_KEY = ""
-EMBEDDING_OPENAI_BASE_URL = ""
+# Embedding (independent)
+EMBEDDING_OPENAI_API_KEY = "xx-embedding"
+EMBEDDING_OPENAI_BASE_URL = "https://embedding.example.com/v1"
 EMBEDDING_MODEL = "text-embedding-3-large"
 # Embedding vector dimension:
 # - 0: auto infer from embedding API response dimension (recommended)
