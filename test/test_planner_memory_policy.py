@@ -29,6 +29,7 @@ class _DummyRecord:
 class _DummyMemory:
     def __init__(self):
         self.query_calls = 0
+        self.query_contents = []
         self.create_calls = 0
         self.update_calls = 0
         self.delete_calls = 0
@@ -36,6 +37,7 @@ class _DummyMemory:
 
     def query(self, content, top_k):
         self.query_calls += 1
+        self.query_contents.append(content)
         return [_DummyRecord(1, ["tag"])], {1: 0.9}
 
     def create(self, tags, text=None, image_path=None, **kwargs):
@@ -74,6 +76,41 @@ class PlannerMemoryPolicyTest(unittest.TestCase):
         self.assertEqual(memory.create_calls, 1)
         self.assertEqual(memory.update_calls, 0)
         self.assertEqual(memory.delete_calls, 0)
+
+    def test_query_splits_comma_separated_terms(self):
+        memory = _DummyMemory()
+        planner = PlannerAgent(
+            vlm=_DummyVLM(),
+            memory=memory,
+            prompt_name="multitag_planner",
+        )
+        ops = [
+            MemoryOperation(type="QUERY", id=None, obj_name=None, text=None, reason="", raw_xml="", query="toy_bread, box, left_plate"),
+        ]
+
+        planner._apply_memory_operations(ops)
+
+        self.assertEqual(memory.query_calls, 3)
+        self.assertEqual(memory.query_contents, ["toy_bread", "box", "left_plate"])
+
+    def test_query_results_are_deduplicated_across_terms(self):
+        memory = _DummyMemory()
+        planner = PlannerAgent(
+            vlm=_DummyVLM(),
+            memory=memory,
+            prompt_name="multitag_planner",
+        )
+        ops = [
+            MemoryOperation(type="QUERY", id=None, obj_name=None, text=None, reason="", raw_xml="", query="toy_bread,box"),
+        ]
+
+        result_text = planner._apply_memory_operations(ops)
+
+        self.assertEqual(result_text.count("Record ID=1"), 1)
+        self.assertIn("--- QUERY: toy_bread ---", result_text)
+        self.assertIn("--- QUERY: box ---", result_text)
+        self.assertIn("UpdatedAt:", result_text)
+        self.assertIn("All matching records were already shown above", result_text)
 
 
 if __name__ == "__main__":

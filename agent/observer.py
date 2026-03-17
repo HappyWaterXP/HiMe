@@ -49,9 +49,9 @@ class ObserverAgent:
     - images: 这一次要看的所有 frame 图像
     """
 
-    def __init__(self, vlm: ObserverVLM) -> None:
+    def __init__(self, vlm: ObserverVLM, prompt_name: str = "observer") -> None:
         self.vlm = vlm
-        self.system_prompt: str = load_prompt("observer")
+        self.system_prompt: str = load_prompt(prompt_name)
 
     def run(
         self,

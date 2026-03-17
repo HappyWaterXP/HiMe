@@ -97,9 +97,11 @@ def init_agents_once() -> None:
 
     ablation = load_ablation_setting()
     prompt_name = os.environ.get("PLANNER_PROMPT_NAME", "").strip() or ablation.prompt_name
+    observer_prompt_name = os.environ.get("OBSERVER_PROMPT_NAME", "").strip() or "observer"
     memory_op_policy = os.environ.get("PLANNER_MEMORY_OP_POLICY", "").strip() or ablation.memory_op_policy
     print(f"[App] Ablation profile={ablation.profile}")
     print(f"[App] Using planner prompt: {prompt_name}")
+    print(f"[App] Using observer prompt: {observer_prompt_name}")
     print(f"[App] Planner memory_op_policy={memory_op_policy}")
     print(
         f"[App] Planner model={cfg.planner_model}, planner_base_url={cfg.planner_base_url}"
@@ -150,7 +152,7 @@ def init_agents_once() -> None:
         prompt_name=prompt_name,
         memory_op_policy=memory_op_policy,
     )
-    observer = ObserverAgent(vlm=observer_vlm)
+    observer = ObserverAgent(vlm=observer_vlm, prompt_name=observer_prompt_name)
 
     task_manager.set_agents(planner, observer)
 

@@ -55,6 +55,58 @@ class FakeObserverAgent:
         return SimpleNamespace(status=status, raw_xml="<observer/>")
 
 
+class FakePendingOnlyPlannerAgent(FakePlannerAgent):
+    def run_refine(
+        self,
+        *,
+        image_paths,
+        initial_plan_list,
+        user_instruction,
+        **kwargs,
+    ):
+        self.calls.append(
+            {
+                "initial_plan_list": initial_plan_list,
+                "user_instruction": user_instruction,
+                "image_count": len(image_paths or []),
+            }
+        )
+        return SimpleNamespace(
+            plan_text=(
+                "[pending] pick up the toy croissant from the left plate and place it in the box\n"
+                "[pending] pick up the toy mushroom from the right plate and place it in the box\n"
+                "[pending] pick up the toy bread from the table and place it in the box"
+            ),
+            summary="ok",
+            raw_xml="<planner/>",
+            memory_operations=[],
+        )
+
+
+class FakeSingleNewPlanPlannerAgent(FakePlannerAgent):
+    def run_refine(
+        self,
+        *,
+        image_paths,
+        initial_plan_list,
+        user_instruction,
+        **kwargs,
+    ):
+        self.calls.append(
+            {
+                "initial_plan_list": initial_plan_list,
+                "user_instruction": user_instruction,
+                "image_count": len(image_paths or []),
+            }
+        )
+        return SimpleNamespace(
+            plan_text="[current] pick up the toy croissant from the box and place it on the left plate",
+            summary="ok",
+            raw_xml="<planner/>",
+            memory_operations=[],
+        )
+
+
 class TaskManagerStateMachineTest(unittest.TestCase):
     def test_async_done_trigger_is_not_queued(self):
         manager = ServerTaskManager()
@@ -136,6 +188,89 @@ class TaskManagerStateMachineTest(unittest.TestCase):
         self.assertEqual(updated.global_instruction, "new user instruction")
         self.assertIn(updated.runtime_state, (TaskStateEnum.OBSERVING, TaskStateEnum.DONE))
         self.assertEqual(len(planner.calls), 3)
+
+    def test_user_instruction_after_done_extends_completed_plan(self):
+        manager = ServerTaskManager()
+        planner = FakePlannerAgent()
+        observer = FakeObserverAgent(statuses=["not_done"])
+        manager.set_agents(planner, observer)
+
+        cfg = TaskConfig(use_observer=False, planner_execution_mode="sync", observer_window_size=4, use_memory=False)
+        state = manager.create_task(
+            global_instruction="initial",
+            initial_robot_input=RobotImageInput(waist_image=_make_img(), image=_make_img()),
+            config=cfg,
+        )
+        manager.add_step_and_maybe_refine_robot(
+            state.task_id,
+            RobotImageInput(waist_image=[_make_img()], image=[_make_img()]),
+        )
+
+        state.is_done = True
+        state.runtime_state = TaskStateEnum.DONE
+        state.plan_list = "[done] everything finished"
+        state.current_subtask_description = None
+
+        updated = manager.refine_with_user_instruction(state.task_id, "do one more thing")
+
+        self.assertEqual(updated.global_instruction, "do one more thing")
+        self.assertFalse(updated.extra.get("extend_from_done", False))
+        self.assertEqual(planner.calls[-1]["initial_plan_list"], "[done] everything finished")
+        self.assertIn("do one more thing", planner.calls[-1]["user_instruction"])
+        self.assertIn("Keep the completed plan as history", planner.calls[-1]["user_instruction"])
+        self.assertIn("----- Past Plan History -----", planner.calls[-1]["user_instruction"])
+        self.assertIn("[done] everything finished", planner.calls[-1]["user_instruction"])
+        self.assertEqual(planner.calls[-1]["image_count"], 1)
+
+    def test_pending_only_plan_promotes_first_pending_to_current(self):
+        manager = ServerTaskManager()
+        planner = FakePendingOnlyPlannerAgent()
+        observer = FakeObserverAgent(statuses=["not_done"])
+        manager.set_agents(planner, observer)
+
+        cfg = TaskConfig(use_observer=False, planner_execution_mode="sync", observer_window_size=4, use_memory=False)
+        state = manager.create_task(
+            global_instruction="initial",
+            initial_robot_input=RobotImageInput(waist_image=_make_img(), image=_make_img()),
+            config=cfg,
+        )
+
+        self.assertFalse(state.is_done)
+        self.assertEqual(state.runtime_state, TaskStateEnum.OBSERVING)
+        self.assertTrue(state.plan_list.startswith("[current] pick up the toy croissant"))
+        self.assertEqual(
+            state.current_subtask_description,
+            "pick up the toy croissant from the left plate and place it in the box",
+        )
+
+    def test_user_instruction_after_done_merges_past_history_into_plan(self):
+        manager = ServerTaskManager()
+        planner = FakeSingleNewPlanPlannerAgent()
+        observer = FakeObserverAgent(statuses=["not_done"])
+        manager.set_agents(planner, observer)
+
+        cfg = TaskConfig(use_observer=False, planner_execution_mode="sync", observer_window_size=4, use_memory=False)
+        state = manager.create_task(
+            global_instruction="initial",
+            initial_robot_input=RobotImageInput(waist_image=_make_img(), image=_make_img()),
+            config=cfg,
+        )
+
+        state.is_done = True
+        state.runtime_state = TaskStateEnum.DONE
+        state.plan_list = "[done] pick up the toy croissant from the left plate and place it in the box"
+        state.current_subtask_description = None
+
+        updated = manager.refine_with_user_instruction(state.task_id, "reset the toys")
+
+        self.assertIn("----- Past Plan History -----", updated.plan_list)
+        self.assertIn("----- Current Active Plan -----", updated.plan_list)
+        self.assertIn("[done] pick up the toy croissant from the left plate and place it in the box", updated.plan_list)
+        self.assertIn("[current] pick up the toy croissant from the box and place it on the left plate", updated.plan_list)
+        self.assertEqual(
+            updated.current_subtask_description,
+            "pick up the toy croissant from the box and place it on the left plate",
+        )
 
 
 if __name__ == "__main__":

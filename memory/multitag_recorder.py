@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, asdict
 from typing import Dict, List, Literal, Optional, Any, Tuple, Set
+from datetime import datetime
+import time
 import numpy as np
 
 from .encoder import BaseEncoder
@@ -29,6 +31,7 @@ class MultiTagMemoryRecord:
     data_type: DataType
     text_embedding: Optional[List[float]] = None
     image_path: Optional[str] = None
+    updated_at: float = 0.0
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -77,6 +80,22 @@ class MultiTagMemory:
 
     def _encode_text(self, text: str) -> List[float]:
         return self._encoder.encode_text(text)
+
+    @staticmethod
+    def _now_ts() -> float:
+        return time.time()
+
+    @staticmethod
+    def format_timestamp(ts: Optional[float]) -> str:
+        if ts is None:
+            return "unknown"
+        try:
+            ts_val = float(ts)
+        except (TypeError, ValueError):
+            return "unknown"
+        if ts_val <= 0:
+            return "unknown"
+        return datetime.fromtimestamp(ts_val).strftime("%Y-%m-%d %H:%M:%S")
 
     @staticmethod
     def _cosine_sim(a: List[float], b: List[float]) -> float:
@@ -239,6 +258,7 @@ class MultiTagMemory:
             data_type=data_type,
             text_embedding=txt_emb,
             image_path=image_path,
+            updated_at=self._now_ts(),
         )
         self._store[rec_id] = record
         
@@ -409,6 +429,8 @@ class MultiTagMemory:
         if image_path is not None:
             rec.image_path = image_path
 
+        rec.updated_at = self._now_ts()
+
         # 一般不需要再写回 _store（rec 是引用），但写了也无妨
         self._store[rec_id] = rec
         return rec
@@ -523,6 +545,8 @@ class MultiTagMemory:
                 "data_type": rec.data_type,
                 "text": rec.text,
                 "image_path": rec.image_path,
+                "updated_at": rec.updated_at,
+                "updated_at_readable": self.format_timestamp(rec.updated_at),
                 # 不返回 text_embedding
             })
         return light_records
@@ -599,6 +623,7 @@ class MultiTagMemory:
                 "data_type": rec.data_type,
                 "text": rec.text,
                 "image_path": str(rec.image_path) if rec.image_path else None,
+                "updated_at": rec.updated_at,
             })
 
         # 写入文件
@@ -691,6 +716,7 @@ class MultiTagMemory:
             data_type = rec_data.get("data_type", "text")
             text = rec_data.get("text", "")
             image_path = rec_data.get("image_path")
+            updated_at = rec_data.get("updated_at", 0.0)
 
             # 生成 text_embedding
             text_embedding = None
@@ -705,6 +731,7 @@ class MultiTagMemory:
                 text=text,
                 text_embedding=text_embedding,
                 image_path=image_path,
+                updated_at=updated_at,
             )
 
             # 添加到 store

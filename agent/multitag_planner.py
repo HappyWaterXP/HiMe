@@ -6,6 +6,7 @@ from typing import List, Optional, Dict, Any, Tuple
 from pathlib import Path
 import re
 import json
+import time
 from datetime import datetime
 
 from prompt_loader import load_prompt
@@ -46,6 +47,64 @@ def parse_image_indices(image_path_str: Optional[str]) -> List[int]:
     
     return indices
 
+
+def parse_query_terms(query_text: Optional[str]) -> List[str]:
+    """
+    将 QUERY 内容按逗号拆成多个独立 tag。
+
+    约定：
+    - `apple, box, on_table` -> ["apple", "box", "on_table"]
+    - 不按空格拆分，空格保留在单个 term 内
+    - 为空时返回 []
+    """
+    if not query_text:
+        return []
+
+    parts = [part.strip() for part in str(query_text).split(",")]
+    normalized_terms = []
+    for part in parts:
+        if not part:
+            continue
+        cleaned = part.strip().strip("[]\"'")
+        cleaned = re.sub(r"\s+", "_", cleaned)
+        cleaned = re.sub(r"_+", "_", cleaned).strip("_").lower()
+        if cleaned:
+            normalized_terms.append(cleaned)
+    return normalized_terms
+
+
+def format_timestamp(ts: Optional[float]) -> str:
+    if ts is None:
+        return "unknown"
+    try:
+        ts_val = float(ts)
+    except (TypeError, ValueError):
+        return "unknown"
+    if ts_val <= 0:
+        return "unknown"
+    return datetime.fromtimestamp(ts_val).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def infer_frame_timestamp(path: Optional[str]) -> Optional[float]:
+    """
+    为输入帧推断本地时间戳。
+
+    优先使用文件名里的 13 位毫秒时间戳；如果没有，则回退到文件 mtime。
+    """
+    if not path:
+        return None
+
+    match = re.search(r"(\d{13})", Path(path).name)
+    if match:
+        try:
+            return int(match.group(1)) / 1000.0
+        except ValueError:
+            pass
+
+    try:
+        return Path(path).stat().st_mtime
+    except OSError:
+        return None
 
 # ========== 输出结构 ==========
 
@@ -94,9 +153,9 @@ class PlannerAgent:
         self.last_query_results_text: str = ""
         self.last_query_image_paths: List[str] = []
 
-        # ✅ 当前 refine 会话的原始输入图片路径列表
+        # ✅ 当前 refine 会话的原始输入图片路径列表（Turn 1 执行帧）
         self.current_input_image_paths: List[str] = []
-        # ✅ 当前 step 实际喂给模型的图片路径列表（Turn1 原图 / Turn2+ 查询附图）
+        # ✅ 当前 step 实际喂给模型的图片路径列表（仅用于调试/导出）
         self.current_turn_image_paths: List[str] = []
 
     # ---------- 状态操作 ----------
@@ -132,11 +191,13 @@ class PlannerAgent:
             return []
         
         indices = parse_image_indices(image_path_str)
-        source_paths = self.current_turn_image_paths
-        source_name = "current_turn_images"
+        # image_path 始终绑定到 Turn 1 的执行帧。
+        # Turn 2 的检索附件只用于阅读 memory，不参与索引映射。
+        source_paths = self.current_input_image_paths
+        source_name = "turn1_input_images"
         if not source_paths:
-            source_paths = self.current_input_image_paths
-            source_name = "current_input_images"
+            source_paths = self.current_turn_image_paths
+            source_name = "current_turn_images"
         
         resolved_paths = []
         for idx in indices:
@@ -149,6 +210,18 @@ class PlannerAgent:
                 )
         
         return resolved_paths
+
+    def _resolve_representative_image_path(self, image_path_str: Optional[str]) -> Optional[str]:
+        """
+        解析 image_path，并只保留一个代表性帧。
+
+        如果模型给出多个候选帧，默认取最后一个有效帧，
+        作为当前事实在 recent frames 中最具代表性的证据图。
+        """
+        resolved_paths = self._resolve_image_paths(image_path_str)
+        if not resolved_paths:
+            return None
+        return resolved_paths[-1]
 
     # ---------- Memory 操作 ----------
 
@@ -198,6 +271,7 @@ class PlannerAgent:
         # 图片去重 + ref 分配（跨多个 QUERY）
         image_path_to_ref: dict[str, str] = {}
         ref_to_path: dict[str, str] = {}
+        ref_to_latest_ts: dict[str, float] = {}
         img_counter = 0
 
         for op in operations:
@@ -214,21 +288,30 @@ class PlannerAgent:
                     continue
 
                 try:
-                    records, scores = self.memory.query(
-                        content=query_content,
-                        top_k=5,
-                    )
+                    query_terms = parse_query_terms(query_content)
+                    if not query_terms:
+                        result_lines.append("\n❌ QUERY: Missing query content")
+                        continue
 
-                    result_lines.append(f"\n--- QUERY: {query_content} ---")
+                    for query_term in query_terms:
+                        records, scores = self.memory.query(
+                            content=query_term,
+                            top_k=5,
+                        )
 
-                    if not records:
-                        result_lines.append("  (No matching records found)")
-                    else:
-                        for rank, rec in enumerate(records, 1):
+                        result_lines.append(f"\n--- QUERY: {query_term} ---")
+
+                        if not records:
+                            result_lines.append("  (No matching records found)")
+                            continue
+
+                        displayed_rank = 0
+                        for rec in records:
                             # 跨 QUERY 对 record ID 去重：同一 rec（text/image）只展示一次
                             if rec.id in seen_record_ids:
                                 continue
                             seen_record_ids.add(rec.id)
+                            displayed_rank += 1
 
                             score = scores.get(rec.id, 0.0)
                             data_type = rec.data_type
@@ -236,7 +319,10 @@ class PlannerAgent:
                             tags_str = ", ".join(rec.tags or [])
 
                             result_lines.append(
-                                f"  #{rank} Record ID={rec.id} | Type={data_type} | Tags=[{tags_str}] | Score={score:.3f}"
+                                f"  #{displayed_rank} Record ID={rec.id} | Type={data_type} | Tags=[{tags_str}] | Score={score:.3f}"
+                            )
+                            result_lines.append(
+                                f"    UpdatedAt: {format_timestamp(getattr(rec, 'updated_at', None))}"
                             )
 
                             if value:
@@ -256,10 +342,16 @@ class PlannerAgent:
                                 else:
                                     ref = image_path_to_ref[img_path]
 
+                                rec_updated_at = getattr(rec, "updated_at", 0.0) or 0.0
+                                ref_to_latest_ts[ref] = max(ref_to_latest_ts.get(ref, 0.0), rec_updated_at)
+
                                 # 在文本里输出 ref（模型将通过 step() 的文本锚定与图片对齐）
                                 result_lines.append(
                                     f"    ImageRef: {ref} | file={Path(img_path).name}"
                                 )
+
+                        if displayed_rank == 0:
+                            result_lines.append("  (All matching records were already shown above)")
 
                 except Exception as e:
                     result_lines.append(f"\n❌ QUERY failed: {str(e)}")
@@ -278,28 +370,24 @@ class PlannerAgent:
                     continue
 
                 try:
-                    resolved_paths = self._resolve_image_paths(op.image_path)
+                    representative_path = self._resolve_representative_image_path(op.image_path)
 
-                    if op.image_path and not resolved_paths:
+                    if op.image_path and not representative_path:
                         result_lines.append(
                             f"\n⚠️  CREATE: Specified image_path='{op.image_path}' but no valid images found, creating text record instead"
                         )
 
-                    if resolved_paths:
-                        created_ids = []
-                        for img_path in resolved_paths:
-                            rec = self.memory.create(
-                                tags=tags_to_use,
-                                data_type="image",
-                                data_value=op.text,
-                                text=op.text,
-                                image_path=img_path,
-                            )
-                            created_ids.append(rec.id)
-
+                    if representative_path:
+                        rec = self.memory.create(
+                            tags=tags_to_use,
+                            data_type="image",
+                            data_value=op.text,
+                            text=op.text,
+                            image_path=representative_path,
+                        )
                         tags_str = ", ".join(tags_to_use)
                         result_lines.append(
-                            f"\n✅ CREATE: Created {len(created_ids)} image record(s) with IDs {created_ids} | Tags=[{tags_str}]"
+                            f"\n✅ CREATE: Created image record ID={rec.id} using representative frame | Tags=[{tags_str}]"
                         )
                     else:
                         rec = self.memory.create(
@@ -331,10 +419,9 @@ class PlannerAgent:
                         update_kwargs["text"] = op.text
 
                     if op.image_path is not None:
-                        resolved_paths = self._resolve_image_paths(op.image_path)
-                        final_image_path = resolved_paths[0] if resolved_paths else None
-                        if final_image_path is not None:
-                            update_kwargs["image_path"] = final_image_path
+                        representative_path = self._resolve_representative_image_path(op.image_path)
+                        if representative_path is not None:
+                            update_kwargs["image_path"] = representative_path
 
                     # tags：None/[] 都维持原 tags；只有非空才更新
                     if op.tags is not None:
@@ -384,7 +471,12 @@ class PlannerAgent:
             ref = f"IMG#{i}"
             img_path = ref_to_path.get(ref)
             if img_path:
-                attachments.append({"ref": ref, "image_path": img_path})
+                attachments.append({
+                    "ref": ref,
+                    "image_path": img_path,
+                    "updated_at": ref_to_latest_ts.get(ref, 0.0),
+                    "updated_at_readable": format_timestamp(ref_to_latest_ts.get(ref, 0.0)),
+                })
 
         self.last_query_image_attachments = attachments
 
@@ -397,7 +489,8 @@ class PlannerAgent:
         self,
         instruction: str,
         plan_list: str,
-        image_count: int
+        image_count: int,
+        current_timestamp_text: str,
     ) -> str:
         """
         构建 Turn 1 的 User Prompt
@@ -416,13 +509,32 @@ class PlannerAgent:
             prompt_parts.append(plan_list)
         else:
             prompt_parts.append("(No existing plan)")
+        prompt_parts.append(
+            f"\nCURRENT TIME: {current_timestamp_text}"
+        )
+        prompt_parts.append(
+            "\nTIME NOTE: The TURN 1 images below are the current world state. "
+            "They are the authoritative source for what is happening now."
+        )
 
         if image_count > 0:
             prompt_parts.append(f"\nINPUT IMAGES: {image_count} image(s) provided below, numbered 1 to {image_count}")
+            prompt_parts.append(
+                "Each image will be preceded by a text anchor showing only its frame index. "
+                "The image order preserves temporal order within TURN 1. "
+                "These TURN 1 frames are a longer-horizon, more sparsely sampled planning sequence, "
+                "so neighboring frames may have larger time gaps. "
+                "Each frame anchor will also show that frame's local timestamp. "
+                "Use the full sequence to understand progress, but use the latest frames to judge the final current state. "
+                "Middle TURN 1 frames often show intermediate motion states, while the latest frame(s) are most useful for judging the final result state. "
+                "Use these TURN 1 images, not memory, to judge the current state."
+            )
 
             # Check if memory is enabled by examining system prompt
             if "MEMORY DISABLED" not in self.system_prompt:
-                prompt_parts.append('💡 When creating/updating memory with images, use: image_path="1" or image_path="2,3"')
+                prompt_parts.append(
+                    '💡 If you add image evidence, choose exactly one frame index in image_path.'
+                )
         else:
             prompt_parts.append("\nINPUT IMAGES: None")
             prompt_parts.append("Do NOT output image_path when no images are provided.")
@@ -468,18 +580,42 @@ class PlannerAgent:
             if query_results_text:
                 prompt_parts.append("=== MEMORY QUERY RESULTS ===")
                 prompt_parts.append(query_results_text)
+                prompt_parts.append(
+                    "\nIMPORTANT: Memory query results are historical records from the past. "
+                    "They can help with context, but they are NOT the current world state."
+                )
+                if self.current_input_image_paths:
+                    prompt_parts.append(
+                        "For deciding what is true now, trust the TURN 1 execution frames over memory results."
+                    )
+                prompt_parts.append(
+                    "Use UpdatedAt to judge recency inside memory: newer memory is usually more relevant than older memory, "
+                    "but memory is still only reference and must not override TURN 1."
+                )
                 prompt_parts.append("\n📌 Note: Retrieved images (if any) are shown below this text.")
                 if attachment_count > 0:
                     prompt_parts.append(
                         f"Retrieved image attachments in this turn: {attachment_count}. "
-                        f"If needed, reference them with image_path=\"1..{attachment_count}\"."
+                        "These attachments are historical memory evidence for reading only. "
+                        "If you output image_path in this turn, it MUST still index the original execution frames from TURN 1."
                     )
                 else:
-                    prompt_parts.append("No retrieved images in this turn. Do NOT output image_path.")
+                    if self.current_input_image_paths:
+                        prompt_parts.append(
+                            "No retrieved images in this turn. "
+                            "If you output image_path, it MUST still index the original execution frames from TURN 1."
+                        )
+                    else:
+                        prompt_parts.append("No retrieved images in this turn. Do NOT output image_path.")
             else:
                 prompt_parts.append("=== NO MEMORY QUERIES PERFORMED ===")
                 prompt_parts.append("Previous operations completed without queries.")
-                prompt_parts.append("Do NOT output image_path in this turn.")
+                if self.current_input_image_paths:
+                    prompt_parts.append(
+                        "If you output image_path in this turn, it MUST still index the original execution frames from TURN 1."
+                    )
+                else:
+                    prompt_parts.append("Do NOT output image_path in this turn.")
 
             prompt_parts.append("\n📋 NEXT STEPS:")
             prompt_parts.append("Based on the query results above, continue refining your plan and performing necessary memory operations.")
@@ -524,10 +660,15 @@ class PlannerAgent:
         # ========== 1. 构建文本 Prompt ==========
         if turn_num == 1:
             effective_plan = current_plan_list if current_plan_list is not None else self.plan_list
+            valid_paths = [p for p in (image_paths or []) if p]
+            current_timestamp_text = format_timestamp(
+                infer_frame_timestamp(valid_paths[-1]) if valid_paths else time.time()
+            )
             user_text = self._build_user_prompt_turn1(
                 instruction=user_instruction or "",
                 plan_list=effective_plan,
-                image_count=len(image_paths) if image_paths else 0
+                image_count=len(image_paths) if image_paths else 0,
+                current_timestamp_text=current_timestamp_text,
             )
         else:
             user_text = self._build_user_prompt_turn_n(
@@ -541,14 +682,21 @@ class PlannerAgent:
 
         # Turn 1: 原始图片
         if turn_num == 1 and image_paths:
-            for p in image_paths:
+            for idx, p in enumerate(image_paths, start=1):
                 if not p:
                     continue
+                frame_timestamp = format_timestamp(infer_frame_timestamp(p))
+                content.append({
+                    "type": "text",
+                    "text": f"[CURRENT FRAME {idx} | Timestamp={frame_timestamp}]"
+                })
                 img_block = self.vlm.base_client.encode_image_to_data_url(p)
                 if img_block is not None:
                     if isinstance(img_block, dict):
                         img_block.setdefault("meta", {})
                         img_block["meta"]["source_path"] = p
+                        img_block["meta"]["frame_index"] = idx
+                        img_block["meta"]["frame_timestamp"] = frame_timestamp
                     content.append(img_block)
                     turn_visible_image_paths.append(p)
 
@@ -558,13 +706,17 @@ class PlannerAgent:
                 ref = att.get("ref") or "IMG#?"
                 img_path = att.get("image_path")
                 rec_ids = att.get("referenced_by", [])
+                updated_at_readable = att.get("updated_at_readable", "unknown")
                 if not img_path:
                     continue
 
                 # ✅ 第二处（在附图阶段）再次显示引用关系：该图被哪些 rec 引用
                 content.append({
                     "type": "text",
-                    "text": f"[ATTACHMENT {ref} | ReferencedByRecIDs={rec_ids}]"
+                    "text": (
+                        f"[ATTACHMENT {ref} | ReferencedByRecIDs={rec_ids} "
+                        f"| MemoryUpdatedAt={updated_at_readable}]"
+                    )
                 })
 
                 img_block = self.vlm.base_client.encode_image_to_data_url(img_path)
@@ -575,6 +727,7 @@ class PlannerAgent:
                         img_block["meta"]["source_path"] = img_path
                         img_block["meta"]["memory_image_ref"] = ref
                         img_block["meta"]["memory_referenced_by"] = rec_ids
+                        img_block["meta"]["memory_updated_at"] = updated_at_readable
                     content.append(img_block)
                     turn_visible_image_paths.append(img_path)
                 else:
@@ -643,18 +796,18 @@ class PlannerAgent:
                     t = item.get("type")
                     if t == "image_url":
                         # 构造可还原占位
-                        source_path = None
-                        if isinstance(item.get("meta"), dict):
-                            source_path = item["meta"].get("source_path")
+                        meta = dict(item.get("meta") or {}) if isinstance(item.get("meta"), dict) else {}
+                        source_path = meta.get("source_path")
                         url_str = ""
                         if isinstance(item.get("image_url"), dict):
                             url_str = item["image_url"].get("url") or ""
                             if (not source_path) and isinstance(url_str, str) and url_str.startswith("file://"):
                                 source_path = url_str[len("file://"):]
+                                meta["source_path"] = source_path
                         placeholder = {
                             "type": "image_url",
                             "image_url": {"url": "<REMOVED_DATA_URL>"},
-                            "meta": {"source_path": source_path or "<UNKNOWN_SOURCE>"},
+                            "meta": meta or {"source_path": source_path or "<UNKNOWN_SOURCE>"},
                         }
                         filtered.append(placeholder)
                     else:
@@ -839,7 +992,11 @@ class PlannerAgent:
                     dtype = rec.get("data_type")
                     val = rec.get("text")
                     preview = (str(val)[:180] + "...") if (val and len(str(val)) > 180) else (str(val) if val is not None else "")
-                    print(f"- ID={rid} | Tags=[{tags}] | type={dtype} | value={preview} | image={rec.get('image_path')}")
+                    updated_at_readable = rec.get("updated_at_readable") or "unknown"
+                    print(
+                        f"- ID={rid} | Tags=[{tags}] | type={dtype} | updated_at={updated_at_readable} "
+                        f"| value={preview} | image={rec.get('image_path')}"
+                    )
                 print("==================================================\n")
 
                 # 可选保存 memory 快照

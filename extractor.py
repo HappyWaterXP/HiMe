@@ -27,6 +27,14 @@ def _clean_text(s: str) -> str:
     return s.strip().replace("\r\n", "\n").replace("\r", "\n")
 
 
+def _normalize_tag_token(tag: str) -> str:
+    s = (tag or "").strip()
+    s = s.strip("[]\"'")
+    s = re.sub(r"\s+", "_", s)
+    s = re.sub(r"_+", "_", s)
+    return s.strip("_").lower()
+
+
 # ===================== Observer 解析 =====================
 
 def parse_observer_output(raw_xml: str) -> Dict[str, Any]:
@@ -164,7 +172,11 @@ def parse_planner_output(xml_text: str) -> Dict[str, Any]:
             tags_list: Optional[List[str]] = None
             if tags_el is not None and tags_el.text:
                 tags_text = tags_el.text.strip()
-                tags_list = [t.strip() for t in tags_text.split(",") if t.strip()]
+                tags_list = [
+                    normalized
+                    for t in tags_text.split(",")
+                    if (normalized := _normalize_tag_token(t))
+                ]
 
             # ✅ 解析 image_path
             image_path_el = op_el.find("image_path")
@@ -192,7 +204,7 @@ def parse_planner_output(xml_text: str) -> Dict[str, Any]:
                         obj_el = content_el.find("obj_name")
                         txt_el = content_el.find("text")
                         if obj_el is not None and obj_el.text:
-                            obj_name = obj_el.text.strip()
+                            obj_name = _normalize_tag_token(obj_el.text)
                         if txt_el is not None and txt_el.text:
                             text_val = txt_el.text.strip()
 
@@ -349,6 +361,8 @@ def extract_all_tasks_status(plan_text: str) -> List[Tuple[str, bool, bool]]:
 
     lines = [ln.strip() for ln in plan_text.splitlines() if ln.strip()]
     for ln in lines:
+        if not re.search(r"\[(current|done|pending)\]", ln, flags=re.IGNORECASE):
+            continue
         is_current = bool(_CURRENT_MARKER_RE.search(ln))
         is_done = bool(re.search(r"\[done\]", ln, flags=re.IGNORECASE))
 
@@ -379,3 +393,28 @@ def is_plan_done(plan_text: str) -> bool:
         return True
 
     return False
+
+
+def ensure_plan_has_current(plan_text: str) -> str:
+    """
+    如果 plan 里没有 [current]，但存在 [pending]，则把第一个 [pending] 提升为 [current]。
+
+    目的：
+    - 避免模型返回“只有 pending、没有 current”的非法中间状态
+    - 保证后续框架与下一轮模型输入都能看到修正后的 current
+    """
+    if not plan_text or not plan_text.strip():
+        return plan_text
+
+    lines = plan_text.splitlines()
+    has_current = any(_CURRENT_MARKER_RE.search(line) for line in lines if line.strip())
+    if has_current:
+        return plan_text
+
+    pending_re = re.compile(r"\[pending\]", flags=re.IGNORECASE)
+    for idx, line in enumerate(lines):
+        if pending_re.search(line):
+            lines[idx] = pending_re.sub("[current]", line, count=1)
+            return "\n".join(lines)
+
+    return plan_text

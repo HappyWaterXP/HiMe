@@ -30,7 +30,7 @@ from .round_logger import RoundLogger
 
 from agent.multitag_planner import PlannerAgent
 from agent.observer import ObserverAgent
-from extractor import extract_current_subtask, is_plan_done
+from extractor import extract_current_subtask, is_plan_done, ensure_plan_has_current
 
 from .image_utils import RobotImageInput
 
@@ -39,6 +39,22 @@ PLANNER_PREFIX_EN = (
     "Based on the new input, update this plan list by adding, modifying, or marking items as completed as needed."
     "You must preserve previously completed tasks to reflect the full workflow, and your new plan must be an update of the previous plan, even when a new task arrives"
 )
+PLANNER_DONE_EXTENSION_EN = (
+    "The current plan list is fully completed, but the user has now provided a new instruction."
+    "Keep the completed plan as history only, and extend it with any new subtasks required by the new instruction."
+    "In your final plan_list, preserve the old completed lines under a past-history divider, then write the new active plan under a current-plan divider."
+    "Do not assume that an old [done] line is automatically [done] for the new instruction."
+    "If the new instruction requires reversing, changing, or building on the old result, write new subtasks for that work."
+    "Any subtask newly introduced by the new instruction must start as [current] or [pending] unless the current TURN 1 images directly show it is already complete."
+    "If there is no current TURN 1 image evidence, do not mark newly introduced subtasks as [done]."
+    "Every plan line must follow the fixed pick-and-place sentence pattern from the system prompt."
+    "Do not output abstract plan lines about satisfying preferences or goals."
+    "Do not return an all-done plan unless the new instruction is already satisfied by the current world state."
+)
+
+DONE_TASK_REPLAN_TAIL_FRAMES = 1
+PAST_PLAN_DIVIDER = "----- Past Plan History -----"
+CURRENT_PLAN_DIVIDER = "----- Current Active Plan -----"
 
 
 @dataclass
@@ -75,10 +91,28 @@ def build_planner_user_instruction(
     parts.append(base_instruction)
     parts.append("\n")
     parts.append(PLANNER_PREFIX_EN)
-    parts.append("\n----- Current Plan List -----")
-    parts.append((current_plan_list or "").strip())
+    normalized_plan = (current_plan_list or "").strip()
+    if normalized_plan:
+        if PAST_PLAN_DIVIDER in normalized_plan or CURRENT_PLAN_DIVIDER in normalized_plan:
+            parts.append("\n")
+            parts.append(normalized_plan)
+        else:
+            parts.append(f"\n{CURRENT_PLAN_DIVIDER}")
+            parts.append(normalized_plan)
 
     return "\n".join(parts)
+
+
+def merge_past_plan_history(past_plan: str, new_plan: str) -> str:
+    past = (past_plan or "").strip()
+    current = (new_plan or "").strip()
+    if not past:
+        return current
+    if not current:
+        return "\n".join([PAST_PLAN_DIVIDER, past]).strip()
+    if PAST_PLAN_DIVIDER in current:
+        return current
+    return "\n".join([PAST_PLAN_DIVIDER, past, CURRENT_PLAN_DIVIDER, current]).strip()
 
 def sample_up_to_n_evenly(paths: List[str], n: int) -> List[str]:
     """
@@ -401,6 +435,10 @@ class ServerTaskManager:
             print(f"[TaskManager] Task was done, reactivating for user instruction")
             state.is_done = False
             state.runtime_state = TaskStateEnum.OBSERVING
+            state.summary = ""
+            state.current_subtask_description = None
+            state.current_subtask_start_idx = max(0, len(state.image_paths) - DONE_TASK_REPLAN_TAIL_FRAMES)
+            state.extra["extend_from_done"] = True
 
         user_new_instruction = user_new_instruction.strip()
         # User instruction must be blocking. If async planner is running, wait for it first.
@@ -493,7 +531,8 @@ class ServerTaskManager:
         plan_text: str,
         summary: str,
     ) -> None:
-        state.plan_list = (plan_text or "").strip()
+        normalized_plan = ensure_plan_has_current((plan_text or "").strip())
+        state.plan_list = normalized_plan
         state.summary = (summary or "").strip()
 
         if is_plan_done(state.plan_list):
@@ -788,26 +827,46 @@ class ServerTaskManager:
         """
         state.runtime_state = TaskStateEnum.PLANNER_RUNNING
         planner_images = self._collect_current_segment_images(state, max_n=8)
+        extend_from_done = bool(state.extra.pop("extend_from_done", False))
 
         # Note: global_instruction has already been updated to the new instruction
-        user_instruction = build_planner_user_instruction(
-            base_instruction=state.global_instruction,
-            current_plan_list=state.plan_list,
-            is_first_round=False,
-        )
+        if extend_from_done:
+            past_plan_history = (state.plan_list or "").strip()
+            user_instruction = "\n".join(
+                [
+                    state.global_instruction,
+                    "",
+                    PLANNER_DONE_EXTENSION_EN,
+                    PAST_PLAN_DIVIDER,
+                    past_plan_history,
+                ]
+            )
+            initial_plan_list = state.plan_list
+        else:
+            user_instruction = build_planner_user_instruction(
+                base_instruction=state.global_instruction,
+                current_plan_list=state.plan_list,
+                is_first_round=False,
+            )
+            initial_plan_list = state.plan_list
 
         res = self._call_planner_run_refine(
             state=state,
             planner_images=planner_images,
             user_instruction=user_instruction,
-            initial_plan_list=state.plan_list,
+            initial_plan_list=initial_plan_list,
         )
+
+        final_plan_text = res.plan_text or ""
+        if extend_from_done:
+            final_plan_text = merge_past_plan_history(past_plan_history, final_plan_text)
+            res.plan_text = final_plan_text
 
         self._log_planner_interaction(
             state=state,
             planner_images=planner_images,
             user_instruction=user_instruction,
-            initial_plan_list=state.plan_list,
+            initial_plan_list=initial_plan_list,
             planner_result=res,
             ensure_round_started=False,
             end_round=False,
@@ -815,7 +874,7 @@ class ServerTaskManager:
 
         self._apply_planner_result_to_task_state(
             state,
-            plan_text=res.plan_text or "",
+            plan_text=final_plan_text,
             summary=res.summary or "",
         )
 
