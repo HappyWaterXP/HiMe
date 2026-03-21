@@ -50,6 +50,12 @@ class TaskConfig:
     # - async: run planner in background for user-instruction refinement
     planner_execution_mode: Literal["sync", "async"] = "sync"
 
+    # Planner image context:
+    # - segment: use evenly sampled frames from current subtask segment
+    # - recent_window: use the most recent contiguous frames from current subtask segment
+    # - latest_frame: use only the most recent saved frame at trigger time
+    planner_image_mode: Literal["segment", "recent_window", "latest_frame"] = "segment"
+
 
 @dataclass
 class TaskRuntimeState:

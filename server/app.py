@@ -99,10 +99,19 @@ def init_agents_once() -> None:
     prompt_name = os.environ.get("PLANNER_PROMPT_NAME", "").strip() or ablation.prompt_name
     observer_prompt_name = os.environ.get("OBSERVER_PROMPT_NAME", "").strip() or "observer"
     memory_op_policy = os.environ.get("PLANNER_MEMORY_OP_POLICY", "").strip() or ablation.memory_op_policy
+    memory_mode = os.environ.get("PLANNER_MEMORY_MODE", "").strip() or ablation.memory_mode
+    memory_max_records_raw = os.environ.get("PLANNER_MEMORY_MAX_RECORDS", "").strip()
+    if memory_max_records_raw:
+        memory_max_records = int(memory_max_records_raw)
+    else:
+        memory_max_records = ablation.memory_max_records
     print(f"[App] Ablation profile={ablation.profile}")
     print(f"[App] Using planner prompt: {prompt_name}")
     print(f"[App] Using observer prompt: {observer_prompt_name}")
     print(f"[App] Planner memory_op_policy={memory_op_policy}")
+    print(f"[App] Planner memory_mode={memory_mode}")
+    print(f"[App] Planner memory_max_records={memory_max_records}")
+    print(f"[App] Planner image_mode={ablation.planner_image_mode}")
     print(
         f"[App] Planner model={cfg.planner_model}, planner_base_url={cfg.planner_base_url}"
     )
@@ -134,13 +143,14 @@ def init_agents_once() -> None:
     if memory_resume_dir:
         try:
             multitag_memory = load_memory_from_resume_dir(memory_resume_dir, embedding_encoder)
+            multitag_memory.set_max_records(memory_max_records)
             print(f"[App] ✅ Memory resumed: {len(multitag_memory.all())} records loaded")
         except Exception as e:
             print(f"[App] ❌ Failed to resume memory: {e}")
             print(f"[App] ℹ️  Creating fresh memory instead")
-            multitag_memory = MultiTagMemory(embedding_encoder)
+            multitag_memory = MultiTagMemory(embedding_encoder, max_records=memory_max_records)
     else:
-        multitag_memory = MultiTagMemory(embedding_encoder)
+        multitag_memory = MultiTagMemory(embedding_encoder, max_records=memory_max_records)
         print(f"[App] ✅ Initialized fresh shared memory")
 
     planner_vlm = PlannerVLM(base_client=planner_client)
@@ -151,6 +161,7 @@ def init_agents_once() -> None:
         memory=multitag_memory,
         prompt_name=prompt_name,
         memory_op_policy=memory_op_policy,
+        memory_mode=memory_mode,
     )
     observer = ObserverAgent(vlm=observer_vlm, prompt_name=observer_prompt_name)
 
@@ -280,6 +291,7 @@ async def create_task(
         use_observer=effective_use_observer,
         use_memory=effective_use_memory,
         planner_execution_mode=planner_execution_mode,
+        planner_image_mode=ablation.planner_image_mode,
     )
 
     # RobotImageInput for create_task usually takes single images (start state)

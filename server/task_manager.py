@@ -438,7 +438,7 @@ class ServerTaskManager:
             state.summary = ""
             state.current_subtask_description = None
             state.current_subtask_start_idx = max(0, len(state.image_paths) - DONE_TASK_REPLAN_TAIL_FRAMES)
-            state.extra["extend_from_done"] = True
+            state.extra["extend_from_done"] = state.config.use_memory
 
         user_new_instruction = user_new_instruction.strip()
         # User instruction must be blocking. If async planner is running, wait for it first.
@@ -463,6 +463,22 @@ class ServerTaskManager:
         end = len(state.image_paths)
         segment = state.image_paths[start:end] if end > start else []
         return sample_up_to_n_evenly(segment, max_n) if segment else []
+
+    def _collect_recent_segment_images(self, state: TaskRuntimeState, max_n: int = 8) -> List[str]:
+        start = state.current_subtask_start_idx
+        end = len(state.image_paths)
+        segment = state.image_paths[start:end] if end > start else []
+        return segment[-max_n:] if segment else []
+
+    def _collect_planner_images(self, state: TaskRuntimeState, max_n: int = 8) -> List[str]:
+        if state.config.planner_image_mode == "latest_frame":
+            return [state.image_paths[-1]] if state.image_paths else []
+        if state.config.planner_image_mode == "recent_window":
+            return self._collect_recent_segment_images(state, max_n=max_n)
+        return self._collect_current_segment_images(state, max_n=max_n)
+
+    def _planner_sees_history(self, state: TaskRuntimeState) -> bool:
+        return state.config.use_memory
 
     def _call_planner_run_refine(
         self,
@@ -571,8 +587,11 @@ class ServerTaskManager:
             # Keep running with old instruction until current planner job finishes.
             return
 
-        planner_images = self._collect_current_segment_images(state, max_n=8)
-        if mode == "direct_instruction":
+        planner_images = self._collect_planner_images(state, max_n=8)
+        if not self._planner_sees_history(state):
+            user_instruction = state.global_instruction
+            initial_plan_list = None
+        elif mode == "direct_instruction":
             user_instruction = state.global_instruction
             initial_plan_list = state.plan_list
         else:
@@ -722,13 +741,17 @@ class ServerTaskManager:
             return
         state.runtime_state = TaskStateEnum.PLANNER_RUNNING
 
-        planner_images = self._collect_current_segment_images(state, max_n=8)
-        user_instruction = build_planner_user_instruction(
-            base_instruction=state.global_instruction,
-            current_plan_list=state.plan_list,
-            is_first_round=False,
-        )
-        initial_plan_list = state.plan_list
+        planner_images = self._collect_planner_images(state, max_n=8)
+        if self._planner_sees_history(state):
+            user_instruction = build_planner_user_instruction(
+                base_instruction=state.global_instruction,
+                current_plan_list=state.plan_list,
+                is_first_round=False,
+            )
+            initial_plan_list = state.plan_list
+        else:
+            user_instruction = state.global_instruction
+            initial_plan_list = None
         res = self._call_planner_run_refine(
             state=state,
             planner_images=planner_images,
@@ -773,22 +796,25 @@ class ServerTaskManager:
             return
         state.runtime_state = TaskStateEnum.PLANNER_RUNNING
 
-        planner_images = self._collect_current_segment_images(state, max_n=8)
+        planner_images = self._collect_planner_images(state, max_n=8)
 
         user_instruction = state.global_instruction
+        initial_plan_list = state.plan_list
+        if not state.config.use_memory:
+            initial_plan_list = None
 
         res = self._call_planner_run_refine(
             state=state,
             planner_images=planner_images,
             user_instruction=user_instruction,
-            initial_plan_list=state.plan_list,
+            initial_plan_list=initial_plan_list,
         )
 
         self._log_planner_interaction(
             state=state,
             planner_images=planner_images,
             user_instruction=user_instruction,
-            initial_plan_list=state.plan_list,
+            initial_plan_list=initial_plan_list,
             planner_result=res,
             ensure_round_started=True,
             end_round=False,
@@ -826,11 +852,15 @@ class ServerTaskManager:
             - Else: extract current subtask from new plan_list and continue OBSERVING.
         """
         state.runtime_state = TaskStateEnum.PLANNER_RUNNING
-        planner_images = self._collect_current_segment_images(state, max_n=8)
+        planner_images = self._collect_planner_images(state, max_n=8)
         extend_from_done = bool(state.extra.pop("extend_from_done", False))
 
         # Note: global_instruction has already been updated to the new instruction
-        if extend_from_done:
+        if not self._planner_sees_history(state):
+            user_instruction = state.global_instruction
+            initial_plan_list = None
+            extend_from_done = False
+        elif extend_from_done:
             past_plan_history = (state.plan_list or "").strip()
             user_instruction = "\n".join(
                 [

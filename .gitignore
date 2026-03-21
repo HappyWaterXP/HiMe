@@ -3,6 +3,7 @@
 *.md
 .claude
 _server_data
+memer_logs/
 .venv
 _*
 archive/

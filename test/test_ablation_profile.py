@@ -26,17 +26,20 @@ class AblationProfileTest(unittest.TestCase):
         with _temp_env("ABLATION_PROFILE", None):
             cfg = load_ablation_setting()
         self.assertEqual(cfg.profile, "baseline")
+        self.assertEqual(cfg.prompt_name, "task3_v2")
 
-    def test_no_memory_modify_delete_profile(self):
-        with _temp_env("ABLATION_PROFILE", "no_memory_modify_delete"):
+    def test_no_delete_update_profile(self):
+        with _temp_env("ABLATION_PROFILE", "no_delete_update"):
             cfg = load_ablation_setting()
-        self.assertEqual(cfg.prompt_name, "multitag_planner_query_create_only")
+        self.assertEqual(cfg.prompt_name, "task3_no_delete_update")
         self.assertEqual(cfg.memory_op_policy, "query_create_only")
         self.assertTrue(cfg.use_observer)
         self.assertTrue(cfg.use_memory)
 
-    def test_no_reasoning_profile_removed(self):
+    def test_removed_profiles_are_not_available(self):
         self.assertNotIn("no_reasoning", AVAILABLE_ABLATION_PROFILES)
+        self.assertNotIn("no_memory_modify_delete", AVAILABLE_ABLATION_PROFILES)
+        self.assertNotIn("no_observer", AVAILABLE_ABLATION_PROFILES)
 
 
 if __name__ == "__main__":

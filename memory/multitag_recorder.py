@@ -56,11 +56,12 @@ class MultiTagMemory:
     - delete(): 减少所有 tag 引用，可能删除 embedding + 索引
     """
 
-    def __init__(self, encoder: BaseEncoder):
+    def __init__(self, encoder: BaseEncoder, max_records: Optional[int] = None):
         # 记录存储
         self._store: Dict[int, MultiTagMemoryRecord] = {}
         self._next_id: int = 1
         self._encoder = encoder
+        self._max_records: Optional[int] = max_records
         
         # ✅ Tag 管理（全局）
         self._tag_embeddings_cache: Dict[str, List[float]] = {}  # tag -> embedding
@@ -261,8 +262,13 @@ class MultiTagMemory:
             updated_at=self._now_ts(),
         )
         self._store[rec_id] = record
+        deleted_ids: List[int] = []
+        if self._max_records is not None:
+            deleted_ids = self.prune_to_max_records(self._max_records)
         
         print(f"[Memory] Created record {rec_id} with tags: {tags}")
+        if deleted_ids:
+            print(f"[Memory] FIFO pruned oldest records after create: {deleted_ids}")
         return record
 
     # -------------------------------------------------------------------------
@@ -476,6 +482,14 @@ class MultiTagMemory:
     def all(self) -> List[MultiTagMemoryRecord]:
         """获取所有记录"""
         return list(self._store.values())
+
+    def set_max_records(self, n: Optional[int]) -> None:
+        """设置 FIFO 最大记录数；若当前已超限，则立即裁剪。"""
+        if n is not None and n < 0:
+            raise ValueError("n must be >= 0 or None")
+        self._max_records = n
+        if self._max_records is not None:
+            self.prune_to_max_records(self._max_records)
 
     def snapshot(self) -> List[Dict[str, Any]]:
         """获取所有记录的字典形式"""

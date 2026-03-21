@@ -1,4 +1,14 @@
 #!/usr/bin/env python3
+"""
+Startup example:
+
+    source ./env.sh
+    uv run python memer/memer_client.py \
+        --server_url http://127.0.0.1:9000 \
+        --policy_host 192.168.1.103 \
+        --policy_port 8000 \
+        --task_prompt "put all toys in the box"
+"""
 from __future__ import annotations
 
 import argparse

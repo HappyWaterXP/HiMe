@@ -1,4 +1,11 @@
 #!/usr/bin/env python3
+"""
+Startup example:
+
+    source ./env.sh
+    export MEMER_PROMPT_NAME="memer_task3_v2_aligned"
+    uv run uvicorn memer.app:app --host 0.0.0.0 --port 9000
+"""
 from __future__ import annotations
 
 import os
@@ -18,6 +25,7 @@ from pydantic import BaseModel
 from PIL import Image
 
 import openai
+from prompt_loader import load_prompt
 
 # =========================================================
 # Config
@@ -32,13 +40,14 @@ MAX_KEYFRAMES = int(os.environ.get("MEMER_MAX_KEYFRAMES", "8"))
 RECENT_MAX = int(os.environ.get("MEMER_RECENT_MAX", "8"))
 
 COMPOSITE_LAYOUT = os.environ.get("MEMER_COMPOSITE_LAYOUT", "horizontal").lower()
-COMPOSITE_MAX_SIDE = int(os.environ.get("MEMER_COMPOSITE_MAX_SIDE", "1024"))
+COMPOSITE_MAX_SIDE = int(os.environ.get("MEMER_COMPOSITE_MAX_SIDE", "0"))
 
 LOG_ROOT = os.environ.get("MEMER_LOG_ROOT", "./memer_logs")
 SAVE_KEYFRAMES = os.environ.get("MEMER_SAVE_KEYFRAMES", "1") not in {"0", "false", "False"}
 SAVE_RECENT_FRAMES = os.environ.get("MEMER_SAVE_RECENT_FRAMES", "0") in {"1", "true", "True"}
 LOG_JSONL = os.environ.get("MEMER_LOG_JSONL", "1") not in {"0", "false", "False"}
 HISTORY_MEMORY_DIR = os.environ.get("MEMER_HISTORY_MEMORY_DIR", "").strip()
+MEMER_PROMPT_NAME = os.environ.get("MEMER_PROMPT_NAME", "").strip()
 
 client = openai.OpenAI(
     api_key=MEMER_API_KEY,
@@ -46,6 +55,8 @@ client = openai.OpenAI(
 )
 app = FastAPI(title="MemER Action Server (client-aligned)", version="4.0-client-aligned")
 print(f"[MemER] Model={MODEL_NAME}, base_url={MEMER_BASE_URL}")
+if MEMER_PROMPT_NAME:
+    print(f"[MemER] Prompt={MEMER_PROMPT_NAME}")
 
 # =========================================================
 # JSON extraction (tolerant)
@@ -339,6 +350,8 @@ def get_keyframe_frame(task_id: str, frame_id: int) -> Optional[StoredCompositeF
 # =========================================================
 
 def _resize_max_side(img: Image.Image, max_side: int) -> Image.Image:
+    if max_side <= 0:
+        return img
     w, h = img.size
     if max(w, h) <= max_side:
         return img
@@ -361,12 +374,13 @@ def make_composite(head: Image.Image, wrist: Image.Image) -> Image.Image:
             out.paste(img, ((tw - w) // 2, 0))
             return out
 
-        head2 = pad_to_w(head, target_w)
         wrist2 = pad_to_w(wrist, target_w)
+        head2 = pad_to_w(head, target_w)
 
-        out = Image.new("RGB", (target_w, head2.size[1] + wrist2.size[1]), (0, 0, 0))
-        out.paste(head2, (0, 0))
-        out.paste(wrist2, (0, head2.size[1]))
+        # Align with baseline semantics: wrist/waist first, main/head second.
+        out = Image.new("RGB", (target_w, wrist2.size[1] + head2.size[1]), (0, 0, 0))
+        out.paste(wrist2, (0, 0))
+        out.paste(head2, (0, wrist2.size[1]))
         return out
 
     target_h = max(head.size[1], wrist.size[1])
@@ -379,12 +393,13 @@ def make_composite(head: Image.Image, wrist: Image.Image) -> Image.Image:
         out.paste(img, (0, (th - h) // 2))
         return out
 
-    head2 = pad_to_h(head, target_h)
     wrist2 = pad_to_h(wrist, target_h)
+    head2 = pad_to_h(head, target_h)
 
-    out = Image.new("RGB", (head2.size[0] + wrist2.size[0], target_h), (0, 0, 0))
-    out.paste(head2, (0, 0))
-    out.paste(wrist2, (head2.size[0], 0))
+    # Align with baseline semantics: wrist/waist on the left, main/head on the right.
+    out = Image.new("RGB", (wrist2.size[0] + head2.size[0], target_h), (0, 0, 0))
+    out.paste(wrist2, (0, 0))
+    out.paste(head2, (wrist2.size[0], 0))
     return out
 
 async def upload_to_pil_rgb(f: UploadFile) -> Image.Image:
@@ -441,6 +456,32 @@ def build_messages_for_action(global_instruction: str) -> Tuple[str, str]:
         "Each image is a COMPOSITE containing both main and wrist/waist views. Use both.\n"
         "Return JSON only. No markdown. No code fences.\n"
     )
+    if MEMER_PROMPT_NAME:
+        user_text = load_prompt(MEMER_PROMPT_NAME).format(
+            global_instruction=global_instruction
+        )
+        return system_text, user_text
+
+    # user_text = (
+    #     "You will be given:\n"
+    #     "- Memory keyframes: earlier composite images.\n"
+    #     "- Recent frames: up to K composite images, indexed from 1..K.\n\n"
+    #     f"Task:\n{global_instruction}\n\n"
+    #     "Action format rules (VERY IMPORTANT):\n"
+    #     "You MUST output exactly ONE action string in ONE of the following formats:\n"
+    #     "Format A (inspection): inspect <target>\n"
+    #     "<target> should be a container (the left box, the middle box, the right box)\n"
+    #     "Inspect is done when you observe that the robot arm is above a box and see its blck background.\n"
+    #     "Format B (pick and place): pick up <object> <preposition> the <source_location> and place it <preposition> the <target_location>\n"
+    #     "LOCATION naming:\n"
+    #     "Do NOT add any extra prefixes or commentary.\n\n"
+    #     "Output JSON with exactly:\n"
+    #     '{ "action": string, "keyframe_positions": number[] }\n\n'
+    #     "Rules for keyframe_positions:\n"
+    #     "- unique, sorted\n"
+    #     "- each integer must be in [1, K]\n"
+    #     "No extra keys. No explanations.\n"
+    # )
     user_text = (
         "You will be given:\n"
         "- Memory keyframes: earlier composite images.\n"
@@ -448,11 +489,9 @@ def build_messages_for_action(global_instruction: str) -> Tuple[str, str]:
         f"Task:\n{global_instruction}\n\n"
         "Action format rules (VERY IMPORTANT):\n"
         "You MUST output exactly ONE action string in ONE of the following formats:\n"
-        "Format A (inspection): inspect <target>\n"
-        "<target> should be a container (the left box, the middle box, the right box)\n"
-        "Inspect is done when you observe that the robot arm is above a box and see its blck background.\n"
-        "Format B (pick and place): pick up <object> <preposition> the <source_location> and place it <preposition> the <target_location>\n"
-        "LOCATION naming:\n"
+        "Format A (pick and place): pick up <object> <preposition> the <source_location> and place it <preposition> the <target_location>\n"
+        "LOCATION naming: on the left plate, on the right plate, on the table, in the box\n"
+        "OBJECT naming: the toy croissant, the toy mushroom, the toy bread\n"
         "Do NOT add any extra prefixes or commentary.\n\n"
         "Output JSON with exactly:\n"
         '{ "action": string, "keyframe_positions": number[] }\n\n'

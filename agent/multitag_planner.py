@@ -139,10 +139,12 @@ class PlannerAgent:
         memory: Optional[MultiTagMemory] = None,
         prompt_name: str = "multitag_planner",
         memory_op_policy: str = "allow_all",
+        memory_mode: str = "mixed",
     ) -> None:
         self.vlm = vlm
         self.memory = memory
         self.memory_op_policy = (memory_op_policy or "allow_all").strip().lower()
+        self.memory_mode = (memory_mode or "mixed").strip().lower()
 
         self.system_prompt: str = load_prompt(prompt_name)
         self.messages: List[Dict[str, Any]] = [
@@ -157,6 +159,15 @@ class PlannerAgent:
         self.current_input_image_paths: List[str] = []
         # ✅ 当前 step 实际喂给模型的图片路径列表（仅用于调试/导出）
         self.current_turn_image_paths: List[str] = []
+
+    def _memory_disabled(self) -> bool:
+        return "MEMORY DISABLED" in self.system_prompt
+
+    def _text_only_memory_mode(self) -> bool:
+        return self.memory_mode == "text_only"
+
+    def _image_only_memory_mode(self) -> bool:
+        return self.memory_mode == "image_only"
 
     # ---------- 状态操作 ----------
 
@@ -316,22 +327,26 @@ class PlannerAgent:
                             score = scores.get(rec.id, 0.0)
                             data_type = rec.data_type
                             value = rec.text
-                            tags_str = ", ".join(rec.tags or [])
-
-                            result_lines.append(
-                                f"  #{displayed_rank} Record ID={rec.id} | Type={data_type} | Tags=[{tags_str}] | Score={score:.3f}"
-                            )
+                            if self._image_only_memory_mode():
+                                result_lines.append(
+                                    f"  #{displayed_rank} Record ID={rec.id} | Type={data_type} | Score={score:.3f}"
+                                )
+                            else:
+                                tags_str = ", ".join(rec.tags or [])
+                                result_lines.append(
+                                    f"  #{displayed_rank} Record ID={rec.id} | Type={data_type} | Tags=[{tags_str}] | Score={score:.3f}"
+                                )
                             result_lines.append(
                                 f"    UpdatedAt: {format_timestamp(getattr(rec, 'updated_at', None))}"
                             )
 
-                            if value:
+                            if value and not self._image_only_memory_mode():
                                 value_str = str(value)
                                 text_preview = value_str[:200] + ("..." if len(value_str) > 200 else "")
                                 result_lines.append(f"    Content: {text_preview}")
 
                             # Image record: 允许不同 rec 引用同一张图，但图片只附带一次
-                            if data_type == "image" and rec.image_path:
+                            if (not self._text_only_memory_mode()) and data_type == "image" and rec.image_path:
                                 img_path = str(rec.image_path)
 
                                 if img_path not in image_path_to_ref:
@@ -372,7 +387,19 @@ class PlannerAgent:
                 try:
                     representative_path = self._resolve_representative_image_path(op.image_path)
 
-                    if op.image_path and not representative_path:
+                    if self._text_only_memory_mode():
+                        if op.image_path:
+                            result_lines.append(
+                                "\nℹ️  CREATE: TEXT_ONLY_MEMORY active, ignoring image_path and creating a text record"
+                            )
+                        representative_path = None
+                    elif self._image_only_memory_mode() and not representative_path:
+                        result_lines.append(
+                            f"\n❌ CREATE failed: IMAGE_ONLY_MEMORY requires a valid image_path, got '{op.image_path}'"
+                        )
+                        continue
+
+                    if op.image_path and not representative_path and not self._text_only_memory_mode():
                         result_lines.append(
                             f"\n⚠️  CREATE: Specified image_path='{op.image_path}' but no valid images found, creating text record instead"
                         )
@@ -418,10 +445,22 @@ class PlannerAgent:
                     if op.text is not None:
                         update_kwargs["text"] = op.text
 
-                    if op.image_path is not None:
+                    if self._text_only_memory_mode():
+                        if op.image_path is not None:
+                            result_lines.append(
+                                "\nℹ️  UPDATE: TEXT_ONLY_MEMORY active, ignoring image_path and keeping memory text-only"
+                            )
+                        update_kwargs["data_type"] = "text"
+                        update_kwargs["image_path"] = ""
+                    elif op.image_path is not None:
                         representative_path = self._resolve_representative_image_path(op.image_path)
                         if representative_path is not None:
                             update_kwargs["image_path"] = representative_path
+                        elif self._image_only_memory_mode():
+                            result_lines.append(
+                                f"\n❌ UPDATE failed: IMAGE_ONLY_MEMORY requires a valid image_path, got '{op.image_path}'"
+                            )
+                            continue
 
                     # tags：None/[] 都维持原 tags；只有非空才更新
                     if op.tags is not None:
@@ -531,10 +570,15 @@ class PlannerAgent:
             )
 
             # Check if memory is enabled by examining system prompt
-            if "MEMORY DISABLED" not in self.system_prompt:
-                prompt_parts.append(
-                    '💡 If you add image evidence, choose exactly one frame index in image_path.'
-                )
+            if not self._memory_disabled():
+                if self._text_only_memory_mode():
+                    prompt_parts.append("💡 TEXT_ONLY_MEMORY is active. Do NOT output image_path in memory operations.")
+                elif self._image_only_memory_mode():
+                    prompt_parts.append("💡 IMAGE_ONLY_MEMORY is active. Every CREATE memory must use exactly one image_path frame index.")
+                else:
+                    prompt_parts.append(
+                        '💡 If you add image evidence, choose exactly one frame index in image_path.'
+                    )
         else:
             prompt_parts.append("\nINPUT IMAGES: None")
             prompt_parts.append("Do NOT output image_path when no images are provided.")
@@ -542,7 +586,7 @@ class PlannerAgent:
         prompt_parts.append("\n📋 REQUIRED OUTPUT FORMAT:")
 
         # Determine output format based on system prompt
-        if "MEMORY DISABLED" in self.system_prompt:
+        if self._memory_disabled():
             # No memory mode
             if "<subtask>" in self.system_prompt and "<is_complete>" in self.system_prompt:
                 # No plan mode (single subtask output)
@@ -572,7 +616,7 @@ class PlannerAgent:
         prompt_parts = [f"=== TURN {turn_num} ===\n"]
 
         # Check if memory is enabled
-        if "MEMORY DISABLED" in self.system_prompt:
+        if self._memory_disabled():
             # This should not happen in no-memory mode, but handle gracefully
             prompt_parts.append("=== SINGLE TURN MODE ===")
             prompt_parts.append("Memory is disabled. This is an unexpected second turn.")
@@ -592,6 +636,10 @@ class PlannerAgent:
                     "Use UpdatedAt to judge recency inside memory: newer memory is usually more relevant than older memory, "
                     "but memory is still only reference and must not override TURN 1."
                 )
+                if self._text_only_memory_mode():
+                    prompt_parts.append("TEXT_ONLY_MEMORY is active in this experiment. Use textual memory only, and do NOT output image_path in this turn.")
+                elif self._image_only_memory_mode():
+                    prompt_parts.append("IMAGE_ONLY_MEMORY is active in this experiment. New memory should be image-backed and use exactly one TURN 1 image_path when creating evidence-backed facts.")
                 prompt_parts.append("\n📌 Note: Retrieved images (if any) are shown below this text.")
                 if attachment_count > 0:
                     prompt_parts.append(
@@ -610,7 +658,9 @@ class PlannerAgent:
             else:
                 prompt_parts.append("=== NO MEMORY QUERIES PERFORMED ===")
                 prompt_parts.append("Previous operations completed without queries.")
-                if self.current_input_image_paths:
+                if self._text_only_memory_mode():
+                    prompt_parts.append("TEXT_ONLY_MEMORY is active in this experiment. Do NOT output image_path in this turn.")
+                elif self.current_input_image_paths:
                     prompt_parts.append(
                         "If you output image_path in this turn, it MUST still index the original execution frames from TURN 1."
                     )
@@ -623,7 +673,7 @@ class PlannerAgent:
         prompt_parts.append("\n📋 REQUIRED OUTPUT FORMAT:")
 
         # Determine output format based on system prompt
-        if "MEMORY DISABLED" in self.system_prompt:
+        if self._memory_disabled():
             if "<subtask>" in self.system_prompt and "<is_complete>" in self.system_prompt:
                 prompt_parts.append("You must respond in XML format with <summary>, <subtask>, and <is_complete> sections.")
             else:

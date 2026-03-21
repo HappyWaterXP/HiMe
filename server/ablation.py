@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from typing import Literal, Optional
 
 
 @dataclass(frozen=True)
@@ -11,71 +12,84 @@ class AblationSetting:
     use_observer: bool
     use_memory: bool
     memory_op_policy: str
+    memory_mode: str
+    planner_image_mode: Literal["segment", "recent_window", "latest_frame"] = "segment"
+    memory_max_records: Optional[int] = None
 
 
 ABLATION_PROFILE_SETTINGS = {
     "baseline": AblationSetting(
         profile="baseline",
-        prompt_name="multitag_planner",
+        prompt_name="task3_v2",
         use_observer=True,
         use_memory=True,
         memory_op_policy="allow_all",
+        memory_mode="mixed",
+        planner_image_mode="segment",
     ),
-    "no_observer": AblationSetting(
-        profile="no_observer",
-        prompt_name="multitag_planner",
+    "baseline_wo_observer": AblationSetting(
+        profile="baseline_wo_observer",
+        prompt_name="task3_no_observer",
         use_observer=False,
         use_memory=True,
         memory_op_policy="allow_all",
+        memory_mode="mixed",
+        planner_image_mode="recent_window",
     ),
-    "no_memory_interaction": AblationSetting(
-        profile="no_memory_interaction",
-        prompt_name="multitag_planner_no_memory",
+    "baseline_wo_memory": AblationSetting(
+        profile="baseline_wo_memory",
+        prompt_name="task3_no_memory",
         use_observer=True,
         use_memory=False,
         memory_op_policy="disable_all",
+        memory_mode="mixed",
+        planner_image_mode="latest_frame",
     ),
-    "no_memory_modify_delete": AblationSetting(
-        profile="no_memory_modify_delete",
-        prompt_name="multitag_planner_query_create_only",
-        use_observer=True,
-        use_memory=True,
-        memory_op_policy="query_create_only",
-    ),
-    "no_delete": AblationSetting(
-        profile="no_delete",
-        prompt_name="multitag_planner_no_delete",
-        use_observer=True,
-        use_memory=True,
-        memory_op_policy="allow_all",
+    "baseline_wo_memory_wo_observer": AblationSetting(
+        profile="baseline_wo_memory_wo_observer",
+        prompt_name="task3_no_memory_no_observer",
+        use_observer=False,
+        use_memory=False,
+        memory_op_policy="disable_all",
+        memory_mode="mixed",
+        planner_image_mode="latest_frame",
     ),
     "no_text_memory": AblationSetting(
         profile="no_text_memory",
-        prompt_name="multitag_planner_no_text",
+        prompt_name="task3_no_text",
         use_observer=True,
         use_memory=True,
         memory_op_policy="allow_all",
+        memory_mode="image_only",
+        planner_image_mode="segment",
     ),
     "no_image_memory": AblationSetting(
         profile="no_image_memory",
-        prompt_name="multitag_planner_no_image",
+        prompt_name="task3_no_image",
         use_observer=True,
         use_memory=True,
         memory_op_policy="allow_all",
+        memory_mode="text_only",
+        planner_image_mode="segment",
     ),
-    "single_subtask_mode": AblationSetting(
-        profile="single_subtask_mode",
-        prompt_name="multitag_planner_single_subtask",
+    "no_delete_update": AblationSetting(
+        profile="no_delete_update",
+        prompt_name="task3_no_delete_update",
         use_observer=True,
         use_memory=True,
-        memory_op_policy="allow_all",
+        memory_op_policy="query_create_only",
+        memory_mode="mixed",
+        planner_image_mode="segment",
     ),
-    "no_plan_no_memory": AblationSetting(
-        profile="no_plan_no_memory",
-        prompt_name="multitag_planner_no_plan_no_memory",
-        use_observer=False,
-        use_memory=False,
-        memory_op_policy="disable_all",
+    "fifo": AblationSetting(
+        profile="fifo",
+        prompt_name="task3_fifo",
+        use_observer=True,
+        use_memory=True,
+        memory_op_policy="query_create_only",
+        memory_mode="mixed",
+        planner_image_mode="segment",
+        memory_max_records=20,
     ),
 }
 

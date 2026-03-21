@@ -34,6 +34,7 @@ class _DummyMemory:
         self.update_calls = 0
         self.delete_calls = 0
         self._next_id = 1
+        self.last_create_kwargs = None
 
     def query(self, content, top_k):
         self.query_calls += 1
@@ -42,7 +43,19 @@ class _DummyMemory:
 
     def create(self, tags, text=None, image_path=None, **kwargs):
         self.create_calls += 1
-        rec = _DummyRecord(self._next_id, tags or [], text=text or "", image_path=image_path)
+        self.last_create_kwargs = {
+            "tags": tags,
+            "text": text,
+            "image_path": image_path,
+            **kwargs,
+        }
+        rec = _DummyRecord(
+            self._next_id,
+            tags or [],
+            data_type=kwargs.get("data_type", "text"),
+            text=text or "",
+            image_path=image_path,
+        )
         self._next_id += 1
         return rec
 
@@ -111,6 +124,79 @@ class PlannerMemoryPolicyTest(unittest.TestCase):
         self.assertIn("--- QUERY: box ---", result_text)
         self.assertIn("UpdatedAt:", result_text)
         self.assertIn("All matching records were already shown above", result_text)
+
+    def test_no_image_prompt_forces_text_only_memory(self):
+        memory = _DummyMemory()
+        planner = PlannerAgent(
+            vlm=_DummyVLM(),
+            memory=memory,
+            prompt_name="task3_no_image",
+            memory_mode="text_only",
+        )
+        planner.current_input_image_paths = ["frame_1.png"]
+        ops = [
+            MemoryOperation(
+                type="CREATE",
+                id=None,
+                obj_name=None,
+                text="The toy bread is in the box.",
+                reason="",
+                raw_xml="",
+                tags=["toy_bread", "box"],
+                image_path="1",
+            ),
+        ]
+
+        result_text = planner._apply_memory_operations(ops)
+
+        self.assertEqual(memory.create_calls, 1)
+        self.assertEqual(memory.last_create_kwargs["data_type"], "text")
+        self.assertIsNone(memory.last_create_kwargs["image_path"])
+        self.assertIn("TEXT_ONLY_MEMORY active", result_text)
+
+    def test_no_text_prompt_requires_image_backed_memory(self):
+        memory = _DummyMemory()
+        planner = PlannerAgent(
+            vlm=_DummyVLM(),
+            memory=memory,
+            prompt_name="task3_no_text",
+            memory_mode="image_only",
+        )
+        ops = [
+            MemoryOperation(
+                type="CREATE",
+                id=None,
+                obj_name=None,
+                text="The toy bread is in the box.",
+                reason="",
+                raw_xml="",
+                tags=["toy_bread", "box"],
+                image_path=None,
+            ),
+        ]
+
+        result_text = planner._apply_memory_operations(ops)
+
+        self.assertEqual(memory.create_calls, 0)
+        self.assertIn("IMAGE_ONLY_MEMORY requires a valid image_path", result_text)
+
+    def test_no_text_prompt_hides_query_content_text(self):
+        memory = _DummyMemory()
+        planner = PlannerAgent(
+            vlm=_DummyVLM(),
+            memory=memory,
+            prompt_name="task3_no_text",
+            memory_mode="image_only",
+        )
+
+        result_text = planner._apply_memory_operations(
+            [MemoryOperation(type="QUERY", id=None, obj_name=None, text=None, reason="", raw_xml="", query="toy_bread")]
+        )
+
+        self.assertIn("Record ID=1", result_text)
+        self.assertIn("UpdatedAt:", result_text)
+        self.assertNotIn("Content:", result_text)
+        self.assertNotIn("Tags=[", result_text)
 
 
 if __name__ == "__main__":

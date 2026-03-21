@@ -107,10 +107,85 @@ class FakeSingleNewPlanPlannerAgent(FakePlannerAgent):
         )
 
 
+class FakeEchoImageCountPlannerAgent(FakePlannerAgent):
+    def run_refine(
+        self,
+        *,
+        image_paths,
+        initial_plan_list,
+        user_instruction,
+        **kwargs,
+    ):
+        self.calls.append(
+            {
+                "initial_plan_list": initial_plan_list,
+                "user_instruction": user_instruction,
+                "image_count": len(image_paths or []),
+            }
+        )
+        return SimpleNamespace(
+            plan_text="[current] pick up the toy croissant on the left plate and place it in the box",
+            summary="ok",
+            raw_xml="<planner/>",
+            memory_operations=[],
+        )
+
+
+class FakeEchoImagePathsPlannerAgent(FakePlannerAgent):
+    def run_refine(
+        self,
+        *,
+        image_paths,
+        initial_plan_list,
+        user_instruction,
+        **kwargs,
+    ):
+        self.calls.append(
+            {
+                "initial_plan_list": initial_plan_list,
+                "user_instruction": user_instruction,
+                "image_count": len(image_paths or []),
+                "image_paths": list(image_paths or []),
+            }
+        )
+        return SimpleNamespace(
+            plan_text="[current] pick up the toy croissant from the left plate and place it in the box",
+            summary="ok",
+            raw_xml="<planner/>",
+            memory_operations=[],
+        )
+
+
+class FakeAlwaysSlowPlannerAgent(FakePlannerAgent):
+    def run_refine(
+        self,
+        *,
+        image_paths,
+        initial_plan_list,
+        user_instruction,
+        **kwargs,
+    ):
+        self.calls.append(
+            {
+                "initial_plan_list": initial_plan_list,
+                "user_instruction": user_instruction,
+                "image_count": len(image_paths or []),
+            }
+        )
+        if self.non_initial_sleep_s > 0 and len(self.calls) > 1:
+            time.sleep(self.non_initial_sleep_s)
+        return SimpleNamespace(
+            plan_text="[current] inspect the workspace",
+            summary="ok",
+            raw_xml="<planner/>",
+            memory_operations=[],
+        )
+
+
 class TaskManagerStateMachineTest(unittest.TestCase):
     def test_async_done_trigger_is_not_queued(self):
         manager = ServerTaskManager()
-        planner = FakePlannerAgent(non_initial_sleep_s=0.8)
+        planner = FakeAlwaysSlowPlannerAgent(non_initial_sleep_s=0.8)
         observer = FakeObserverAgent(statuses=["done", "done", "not_done"])
         manager.set_agents(planner, observer)
 
@@ -136,7 +211,7 @@ class TaskManagerStateMachineTest(unittest.TestCase):
         )
         d2 = time.time() - t2
 
-        # Async bootstrap step blocks by design to ensure first runnable instruction.
+        # Async bootstrap step still blocks until planner returns a runnable instruction.
         self.assertGreaterEqual(d1, 0.7)
         self.assertLess(d2, 0.2)
         self.assertEqual(manager._get_task(state.task_id).runtime_state, TaskStateEnum.PLANNER_RUNNING)
@@ -163,7 +238,7 @@ class TaskManagerStateMachineTest(unittest.TestCase):
 
     def test_user_instruction_is_blocking_even_in_async_mode(self):
         manager = ServerTaskManager()
-        planner = FakePlannerAgent(non_initial_sleep_s=0.7)
+        planner = FakeAlwaysSlowPlannerAgent(non_initial_sleep_s=0.7)
         observer = FakeObserverAgent(statuses=["not_done"])
         manager.set_agents(planner, observer)
 
@@ -189,7 +264,7 @@ class TaskManagerStateMachineTest(unittest.TestCase):
         self.assertIn(updated.runtime_state, (TaskStateEnum.OBSERVING, TaskStateEnum.DONE))
         self.assertEqual(len(planner.calls), 3)
 
-    def test_user_instruction_after_done_extends_completed_plan(self):
+    def test_user_instruction_after_done_in_no_memory_mode_does_not_send_history(self):
         manager = ServerTaskManager()
         planner = FakePlannerAgent()
         observer = FakeObserverAgent(statuses=["not_done"])
@@ -215,11 +290,11 @@ class TaskManagerStateMachineTest(unittest.TestCase):
 
         self.assertEqual(updated.global_instruction, "do one more thing")
         self.assertFalse(updated.extra.get("extend_from_done", False))
-        self.assertEqual(planner.calls[-1]["initial_plan_list"], "[done] everything finished")
+        self.assertIsNone(planner.calls[-1]["initial_plan_list"])
         self.assertIn("do one more thing", planner.calls[-1]["user_instruction"])
-        self.assertIn("Keep the completed plan as history", planner.calls[-1]["user_instruction"])
-        self.assertIn("----- Past Plan History -----", planner.calls[-1]["user_instruction"])
-        self.assertIn("[done] everything finished", planner.calls[-1]["user_instruction"])
+        self.assertNotIn("Keep the completed plan as history", planner.calls[-1]["user_instruction"])
+        self.assertNotIn("----- Past Plan History -----", planner.calls[-1]["user_instruction"])
+        self.assertNotIn("[done] everything finished", planner.calls[-1]["user_instruction"])
         self.assertEqual(planner.calls[-1]["image_count"], 1)
 
     def test_pending_only_plan_promotes_first_pending_to_current(self):
@@ -243,7 +318,7 @@ class TaskManagerStateMachineTest(unittest.TestCase):
             "pick up the toy croissant from the left plate and place it in the box",
         )
 
-    def test_user_instruction_after_done_merges_past_history_into_plan(self):
+    def test_user_instruction_after_done_in_no_memory_mode_does_not_merge_past_history(self):
         manager = ServerTaskManager()
         planner = FakeSingleNewPlanPlannerAgent()
         observer = FakeObserverAgent(statuses=["not_done"])
@@ -263,14 +338,104 @@ class TaskManagerStateMachineTest(unittest.TestCase):
 
         updated = manager.refine_with_user_instruction(state.task_id, "reset the toys")
 
-        self.assertIn("----- Past Plan History -----", updated.plan_list)
-        self.assertIn("----- Current Active Plan -----", updated.plan_list)
-        self.assertIn("[done] pick up the toy croissant from the left plate and place it in the box", updated.plan_list)
+        self.assertNotIn("----- Past Plan History -----", updated.plan_list)
+        self.assertNotIn("----- Current Active Plan -----", updated.plan_list)
+        self.assertNotIn("[done] pick up the toy croissant from the left plate and place it in the box", updated.plan_list)
         self.assertIn("[current] pick up the toy croissant from the box and place it on the left plate", updated.plan_list)
         self.assertEqual(
             updated.current_subtask_description,
             "pick up the toy croissant from the box and place it on the left plate",
         )
+
+    def test_latest_frame_mode_only_passes_one_image_to_planner(self):
+        manager = ServerTaskManager()
+        planner = FakeEchoImageCountPlannerAgent()
+        observer = FakeObserverAgent(statuses=["done"])
+        manager.set_agents(planner, observer)
+
+        cfg = TaskConfig(
+            use_observer=True,
+            use_memory=False,
+            planner_execution_mode="sync",
+            planner_image_mode="latest_frame",
+            observer_window_size=4,
+        )
+        state = manager.create_task(
+            global_instruction="initial",
+            initial_robot_input=RobotImageInput(waist_image=_make_img(), image=_make_img()),
+            config=cfg,
+        )
+
+        self.assertEqual(planner.calls[0]["image_count"], 1)
+
+        manager.add_step_and_maybe_refine_robot(
+            state.task_id,
+            RobotImageInput(
+                waist_image=[_make_img((0, 0, 0)), _make_img((10, 10, 10)), _make_img((20, 20, 20))],
+                image=[_make_img((30, 30, 30)), _make_img((40, 40, 40)), _make_img((50, 50, 50))],
+            ),
+        )
+
+        self.assertEqual(planner.calls[-1]["image_count"], 1)
+        self.assertIsNone(planner.calls[-1]["initial_plan_list"])
+
+    def test_no_memory_no_observer_direct_subtask_does_not_receive_plan_history(self):
+        manager = ServerTaskManager()
+        planner = FakeEchoImageCountPlannerAgent()
+        observer = FakeObserverAgent(statuses=["not_done"])
+        manager.set_agents(planner, observer)
+
+        cfg = TaskConfig(
+            use_observer=False,
+            use_memory=False,
+            planner_execution_mode="sync",
+            planner_image_mode="latest_frame",
+            observer_window_size=4,
+        )
+        state = manager.create_task(
+            global_instruction="initial",
+            initial_robot_input=RobotImageInput(waist_image=_make_img(), image=_make_img()),
+            config=cfg,
+        )
+
+        state.plan_list = "[done] old step"
+
+        manager.add_step_and_maybe_refine_robot(
+            state.task_id,
+            RobotImageInput(waist_image=[_make_img()], image=[_make_img()]),
+        )
+
+        self.assertIsNone(planner.calls[-1]["initial_plan_list"])
+
+    def test_recent_window_mode_passes_latest_contiguous_frames_to_planner(self):
+        manager = ServerTaskManager()
+        planner = FakeEchoImagePathsPlannerAgent()
+        observer = FakeObserverAgent(statuses=["not_done"])
+        manager.set_agents(planner, observer)
+
+        cfg = TaskConfig(
+            use_observer=False,
+            use_memory=True,
+            planner_execution_mode="sync",
+            planner_image_mode="recent_window",
+            observer_window_size=4,
+        )
+        state = manager.create_task(
+            global_instruction="initial",
+            initial_robot_input=RobotImageInput(waist_image=_make_img(), image=_make_img()),
+            config=cfg,
+        )
+
+        manager.add_step_and_maybe_refine_robot(
+            state.task_id,
+            RobotImageInput(
+                waist_image=[_make_img((i, i, i)) for i in range(10)],
+                image=[_make_img((i + 20, i + 20, i + 20)) for i in range(10)],
+            ),
+        )
+
+        expected = state.image_paths[-8:]
+        self.assertEqual(planner.calls[-1]["image_paths"], expected)
 
 
 if __name__ == "__main__":
