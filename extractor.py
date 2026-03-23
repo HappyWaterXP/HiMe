@@ -372,6 +372,26 @@ def extract_all_tasks_status(plan_text: str) -> List[Tuple[str, bool, bool]]:
             results.append((core, is_done, is_current))
     return results
 
+
+def previous_current_index_became_done(previous_plan_text: str, new_plan_text: str) -> bool:
+    """
+    判断旧 plan 中的 [current] 任务，是否在新 plan 的同一任务索引位置变成了 [done]。
+
+    这里按“任务行索引”比较，而不是按任务名称比较，避免同名 subtask 被误判。
+    只统计包含 [current]/[done]/[pending] 的任务行，自动忽略分隔线等非任务文本。
+    """
+    previous_tasks = extract_all_tasks_status(previous_plan_text)
+    new_tasks = extract_all_tasks_status(new_plan_text)
+    previous_current_idx = next(
+        (idx for idx, (_, _, is_current) in enumerate(previous_tasks) if is_current),
+        None,
+    )
+    if previous_current_idx is None:
+        return False
+    if previous_current_idx >= len(new_tasks):
+        return False
+    return bool(new_tasks[previous_current_idx][1])
+
 def is_plan_done(plan_text: str) -> bool:
     """
     粗粒度判断 plan_list 是否“整体完成”。

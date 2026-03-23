@@ -24,13 +24,18 @@ from .schema import (
     TaskConfig,
     TaskStateEnum,
 )
-from .task_state import create_initial_task_state, save_pil_to_dir
+from .task_state import create_initial_task_state, save_pil_to_dir, save_task_state_json
 from .image_utils import combine_two_pil_horizontally
 from .round_logger import RoundLogger
 
 from agent.multitag_planner import PlannerAgent
 from agent.observer import ObserverAgent
-from extractor import extract_current_subtask, is_plan_done, ensure_plan_has_current
+from extractor import (
+    ensure_plan_has_current,
+    extract_current_subtask,
+    is_plan_done,
+    previous_current_index_became_done,
+)
 
 from .image_utils import RobotImageInput
 
@@ -166,6 +171,14 @@ class ServerTaskManager:
         self.planner_agent = planner
         self.observer_agent = observer
 
+    def add_resumed_task(self, state: TaskRuntimeState) -> None:
+        """Register a previously persisted task state into the in-memory manager."""
+        state.round_logger = RoundLogger(state.logs_dir)
+        state.extra["planner_status"] = "idle"
+        state.extra["planner_last_error"] = None
+        self.tasks[state.task_id] = state
+        print(f"[TaskManager] Resumed task {state.task_id}")
+
     # ---------- Public: create task ----------
 
     def create_task(
@@ -239,6 +252,7 @@ class ServerTaskManager:
             plan_text=res.plan_text or "",
             summary=res.summary or "",
         )
+        self._save_task_resume_snapshot(state)
         if state.is_done:
             print(f"[TaskManager] Task already complete")
         else:
@@ -547,6 +561,7 @@ class ServerTaskManager:
         plan_text: str,
         summary: str,
     ) -> None:
+        previous_plan_text = state.plan_list
         normalized_plan = ensure_plan_has_current((plan_text or "").strip())
         state.plan_list = normalized_plan
         state.summary = (summary or "").strip()
@@ -567,7 +582,15 @@ class ServerTaskManager:
         state.is_done = False
         state.runtime_state = TaskStateEnum.OBSERVING
         state.current_subtask_description = new_sub_desc
-        state.current_subtask_start_idx = len(state.image_paths)
+        if previous_current_index_became_done(previous_plan_text, state.plan_list):
+            state.current_subtask_start_idx = len(state.image_paths)
+
+    def _save_task_resume_snapshot(self, state: TaskRuntimeState) -> None:
+        snapshot_dir = f"{state.logs_dir}/task_state"
+        latest_path = f"{snapshot_dir}/latest_task_state.json"
+        ts_path = f"{snapshot_dir}/task_state_{int(state.created_ts)}_{int(len(state.image_paths))}.json"
+        save_task_state_json(state, latest_path)
+        save_task_state_json(state, ts_path)
 
     def _schedule_async_plan_refresh(
         self,
@@ -668,6 +691,7 @@ class ServerTaskManager:
             plan_text=res.plan_text or "",
             summary=res.summary or "",
         )
+        self._save_task_resume_snapshot(state)
         state.extra["planner_status"] = "idle"
         state.extra["planner_last_error"] = None
 
@@ -774,6 +798,7 @@ class ServerTaskManager:
             plan_text=res.plan_text or "",
             summary=res.summary or "",
         )
+        self._save_task_resume_snapshot(state)
 
     # ---------- Internal: planner refine without observer ----------
 
@@ -825,6 +850,7 @@ class ServerTaskManager:
             plan_text=res.plan_text or "",
             summary=res.summary or "",
         )
+        self._save_task_resume_snapshot(state)
         new_sub_desc = state.current_subtask_description
         if state.is_done:
             print(f"[TaskManager] Task marked as complete")
@@ -907,6 +933,7 @@ class ServerTaskManager:
             plan_text=final_plan_text,
             summary=res.summary or "",
         )
+        self._save_task_resume_snapshot(state)
 
     # ---------- Internal: task lookup ----------
 

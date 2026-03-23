@@ -82,7 +82,8 @@ def format_timestamp(ts: Optional[float]) -> str:
         return "unknown"
     if ts_val <= 0:
         return "unknown"
-    return datetime.fromtimestamp(ts_val).strftime("%Y-%m-%d %H:%M:%S")
+    dt = datetime.fromtimestamp(ts_val)
+    return dt.strftime("%Y-%m-%d %H:%M:%S.") + f"{int(dt.microsecond / 1000):03d}"
 
 
 def infer_frame_timestamp(path: Optional[str]) -> Optional[float]:

@@ -120,7 +120,20 @@ class RoundLogger:
         Path(self.rounds_dir).mkdir(parents=True, exist_ok=True)
 
         self.current_round: Optional[RoundRecord] = None
-        self.round_counter: int = 0
+        self.round_counter: int = self._detect_existing_round_counter()
+
+    def _detect_existing_round_counter(self) -> int:
+        max_round = 0
+        for p in Path(self.rounds_dir).glob("round_*.json"):
+            stem = p.stem
+            parts = stem.split("_")
+            if len(parts) < 3:
+                continue
+            try:
+                max_round = max(max_round, int(parts[1]))
+            except ValueError:
+                continue
+        return max_round
 
     def start_round(self) -> int:
         """

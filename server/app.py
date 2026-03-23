@@ -37,6 +37,7 @@ from .schema import TaskConfig, TaskRuntimeState, TaskStateEnum
 from .image_utils import RobotImageInput
 from .config import load_server_model_config
 from .ablation import load_ablation_setting
+from .task_state import load_task_state_json
 # VLM client & agents
 from client.base_vlm_client import BaseVLMClient
 from client.planner_vlm import PlannerVLM
@@ -71,6 +72,28 @@ def load_memory_from_resume_dir(resume_dir: str, encoder: OpenAIEmbeddingEncoder
     latest = snapshot_files[-1]
     print(f"[App] 📂 Resuming memory from snapshot: {latest}")
     return MultiTagMemory.resume_from_json(str(latest), encoder)
+
+
+def load_task_state_from_resume_dir(resume_dir: str) -> TaskRuntimeState:
+    """
+    Resume task runtime state from a task logs folder.
+    Source:
+    - latest task snapshot under */task_state/latest_task_state.json
+    """
+    base = Path(resume_dir)
+    if not base.exists():
+        raise FileNotFoundError(f"TASK_RESUME_DIR not found: {resume_dir}")
+
+    snapshot_files = sorted(
+        p for p in base.rglob("latest_task_state.json") if p.parent.name == "task_state"
+    )
+    if not snapshot_files:
+        raise FileNotFoundError(
+            f"No task state snapshot found under {resume_dir} (expected */task_state/latest_task_state.json)"
+        )
+    latest = snapshot_files[-1]
+    print(f"[App] 📂 Resuming task state from snapshot: {latest}")
+    return load_task_state_json(str(latest))
 
 
 def init_agents_once() -> None:
@@ -132,7 +155,9 @@ def init_agents_once() -> None:
     )
 
     # Shared memory instance (persisted across tasks during runtime)
+    task_resume_dir = os.environ.get("TASK_RESUME_DIR", "").strip()
     memory_resume_dir = os.environ.get("MEMORY_RESUME_DIR", "").strip()
+    effective_memory_resume_dir = memory_resume_dir or task_resume_dir
     embedding_encoder = OpenAIEmbeddingEncoder(
         embedding_dim=cfg.embedding_dim,
         model=cfg.embedding_model,
@@ -140,9 +165,9 @@ def init_agents_once() -> None:
         base_url=cfg.embedding_base_url,
     )
 
-    if memory_resume_dir:
+    if effective_memory_resume_dir:
         try:
-            multitag_memory = load_memory_from_resume_dir(memory_resume_dir, embedding_encoder)
+            multitag_memory = load_memory_from_resume_dir(effective_memory_resume_dir, embedding_encoder)
             multitag_memory.set_max_records(memory_max_records)
             print(f"[App] ✅ Memory resumed: {len(multitag_memory.all())} records loaded")
         except Exception as e:
@@ -166,6 +191,14 @@ def init_agents_once() -> None:
     observer = ObserverAgent(vlm=observer_vlm, prompt_name=observer_prompt_name)
 
     task_manager.set_agents(planner, observer)
+
+    if task_resume_dir:
+        try:
+            resumed_state = load_task_state_from_resume_dir(task_resume_dir)
+            task_manager.add_resumed_task(resumed_state)
+            print(f"[App] ✅ Task resumed: task_id={resumed_state.task_id}")
+        except Exception as e:
+            print(f"[App] ❌ Failed to resume task state: {e}")
 
 
 def file_to_pil(upload: UploadFile) -> Image.Image:
@@ -204,6 +237,11 @@ class UserInstructionResponse(TaskPublicState):
     pass
 
 
+class ResumeStateResponse(BaseModel):
+    has_resumed_task: bool
+    task: Optional[TaskPublicState] = None
+
+
 def state_to_public(state: TaskRuntimeState) -> TaskPublicState:
     """
     Map internal TaskRuntimeState to a public response model.
@@ -225,6 +263,19 @@ def state_to_public(state: TaskRuntimeState) -> TaskPublicState:
 @app.on_event("startup")
 async def on_startup():
     init_agents_once()
+
+
+@app.get("/resume_state", response_model=ResumeStateResponse)
+async def get_resume_state():
+    if not task_manager.tasks:
+        return ResumeStateResponse(has_resumed_task=False, task=None)
+
+    # Resume flow is intended for one active restored task.
+    state = next(iter(task_manager.tasks.values()))
+    return ResumeStateResponse(
+        has_resumed_task=True,
+        task=state_to_public(state),
+    )
 
 
 @app.post("/tasks", response_model=CreateTaskResponse)

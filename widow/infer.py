@@ -170,6 +170,13 @@ class RobotClient:
         resp.raise_for_status()
         return resp.json()
 
+    def get_resume_state(self) -> Dict[str, Any]:
+        """GET /resume_state: inspect whether server already resumed a task."""
+        url = f"{self.base_url}/resume_state"
+        resp = requests.get(url, timeout=self.timeout)
+        resp.raise_for_status()
+        return resp.json()
+
 
 # ==========================
 # UserClient: Task server (user instructions)
@@ -237,6 +244,13 @@ def user_input_loop(
             print(f"[UserInput] New subtask: {resp.get('current_subtask_description')}\n")
         except Exception as e:
             print(f"\n[UserInput] ✗ Send failed: {e}\n")
+
+
+def is_pick_place_subtask(subtask: Optional[str]) -> bool:
+    if not subtask:
+        return False
+    text = subtask.lower().strip()
+    return text.startswith("pick up ") and " and place it " in text
 
 
 def save_policy_trace_npz(
@@ -374,6 +388,11 @@ def main():
         help="Planner execution mode on task server.",
     )
     parser.add_argument(
+        "--reset_on_new_pick_place_subtask",
+        action="store_true",
+        help="If enabled, when the current subtask changes to a new pick-and-place action, execute one reset cycle before sending that subtask to the policy server.",
+    )
+    parser.add_argument(
         "--policy_trace_npz_folder",
         default="",
         help="Default off. If provided, save policy trace npz under <folder>/<task_id>/<timestamp>.npz",
@@ -434,24 +453,39 @@ def main():
         )
     )
 
-    # 5. Create task (using current frame)
-    head0 = head_cam.capture_image()
-    wrist0 = wrist_cam.capture_image()
-    assert head0 is not None and wrist0 is not None, "Failed to grab initial images"
+    # 5. Resume existing task if server already restored one; otherwise create task.
+    init_resp: Dict[str, Any]
+    try:
+        resume_state = robot_client.get_resume_state()
+    except Exception as e:
+        print(f"[Main] Resume-state probe failed, falling back to create_task: {e}")
+        resume_state = {"has_resumed_task": False}
 
-    init_resp = robot_client.create_task(
-        global_instruction=args.task_prompt,
-        initial_image=head0,
-        initial_waist_image=wrist0,
-    )
-    task_id = init_resp.get("task_id")
-    if not task_id:
-        print("[Main] task server did not return task_id, abort.")
-        return
+    if resume_state.get("has_resumed_task") and isinstance(resume_state.get("task"), dict):
+        init_resp = resume_state["task"]
+        task_id = init_resp.get("task_id")
+        print("[Main] Resume mode: attached to existing task.")
+        print("  task_id:", task_id)
+        print("  current_subtask:", init_resp.get("current_subtask_description"))
+        print("  is_done:", init_resp.get("is_done"))
+    else:
+        head0 = head_cam.capture_image()
+        wrist0 = wrist_cam.capture_image()
+        assert head0 is not None and wrist0 is not None, "Failed to grab initial images"
 
-    print("[Main] Task created:")
-    print("  task_id:", task_id)
-    print("  current_subtask:", init_resp.get("current_subtask_description"))
+        init_resp = robot_client.create_task(
+            global_instruction=args.task_prompt,
+            initial_image=head0,
+            initial_waist_image=wrist0,
+        )
+        task_id = init_resp.get("task_id")
+        if not task_id:
+            print("[Main] task server did not return task_id, abort.")
+            return
+
+        print("[Main] Fresh mode: created new task.")
+        print("  task_id:", task_id)
+        print("  current_subtask:", init_resp.get("current_subtask_description"))
 
     policy_trace_npz_dir = (args.policy_trace_npz_folder or args.policy_trace_npz_dir).strip()
     if policy_trace_npz_dir:
@@ -466,6 +500,8 @@ def main():
 
     # Current policy prompt
     current_policy_prompt = init_resp.get("current_subtask_description") or args.task_prompt
+    last_server_subtask = current_policy_prompt.strip() if isinstance(current_policy_prompt, str) else ""
+    pending_reset_subtask: Optional[str] = None
 
     # Track task completion status
     task_is_done = init_resp.get("is_done", False)
@@ -502,145 +538,117 @@ def main():
 
             # 6.1 Execute n policy calls (only if task not done)
             if not task_is_done:
-                # ✅ Check if current task is a RESET instruction
-                is_reset_task = (
-                    current_policy_prompt and
-                    current_policy_prompt.lower().strip().startswith("reset")
-                )
-
-                if is_reset_task:
-                    # === RESET HANDLING ===
-                    print(f"\n[Main] 🔄 Detected RESET instruction: '{current_policy_prompt}'")
-                    print("[Main] → Executing robot.reset_to_home()...")
-
+                if pending_reset_subtask:
+                    print("\n[Main] ↻ Executing pre-subtask reset.")
+                    print("[Main] → Calling robot.reset_to_home()...")
                     try:
-                        # Execute reset to home
                         robot.reset_to_home()
-
-                        # Wait for robot to stabilize
-                        time.sleep(0.5)
-
-                        # Capture post-reset images
-                        print("[Main] → Capturing post-reset images...")
-                        head_img = head_cam.capture_image()
-                        wrist_img = wrist_cam.capture_image()
-
-                        if head_img is not None and wrist_img is not None:
-                            head_img_buffer.append(head_img)
-                            wrist_img_buffer.append(wrist_img)
-                            print("[Main] ✓ Reset completed, images buffered")
-                        else:
-                            print("[Main] ⚠ Failed to capture images after reset")
-                            time.sleep(0.1)
-                            continue
-
+                        time.sleep(1.0)
                     except Exception as e:
                         print(f"[Main] ✗ Reset execution failed: {e}")
                         stop_flag.set()
                         break
+                    current_policy_prompt = pending_reset_subtask
+                    pending_reset_subtask = None
 
-                    # Skip normal policy execution, go directly to send_step
-                    # (no for loop over policy_calls_per_observation)
+                # === NORMAL POLICY EXECUTION ===
+                for policy_call_idx in range(args.policy_calls_per_observation):
+                    if stop_flag.is_set():
+                        break
 
-                else:
-                    # === NORMAL POLICY EXECUTION ===
-                    for policy_call_idx in range(args.policy_calls_per_observation):
-                        if stop_flag.is_set():
+                    # Get current robot state
+                    try:
+                        all_state = robot.get_state()
+                    except Exception as e:
+                        time.sleep(0.1)
+                        continue
+
+                    eef_state = all_state["end_effector_pose"]
+
+                    if args.policy_proprio_mode == "joints_positions":
+                        joint_state = all_state["joint_states"]
+                        gripper_state = all_state["gripper_state"]
+                        input_state = np.concatenate([joint_state, gripper_state[1:]])
+                    else:
+                        gripper_state = all_state["gripper_state"]
+                        input_state = np.concatenate(
+                            [eef_euler2axis(eef_state), gripper_state[1:]]
+                        )
+
+                    # Capture fresh images for this policy call
+                    head_img = head_cam.capture_image()
+                    wrist_img = wrist_cam.capture_image()
+                    if head_img is None or wrist_img is None:
+                        time.sleep(0.1)
+                        continue
+
+                    # === BUFFERING: Save images to send to observer later ===
+                    head_img_buffer.append(head_img)
+                    wrist_img_buffer.append(wrist_img)
+
+                    # Resize images for policy
+                    head_img_p = image_tools.convert_to_uint8(
+                        image_tools.resize_with_pad(head_img, 224, 224)
+                    )
+                    wrist_img_p = image_tools.convert_to_uint8(
+                        image_tools.resize_with_pad(wrist_img, 224, 224)
+                    )
+
+                    observation = {
+                        "observation/state": input_state,
+                        "observation/image": head_img_p,
+                        "observation/wrist_image": wrist_img_p,
+                        "prompt": current_policy_prompt,
+                    }
+
+                    # Call policy
+                    try:
+                        result = policy_client.infer(observation)
+                        actions = result["actions"]
+                    except Exception as e:
+                        continue
+
+                    if trace_writer is not None:
+                        trace_writer.enqueue(
+                            head_image=head_img_p,
+                            wrist_image=wrist_img_p,
+                            state=input_state,
+                            task_description=current_policy_prompt,
+                            actions=actions,
+                        )
+
+                    # Execute actions
+                    executed = 0
+                    for a in actions:
+                        if stop_flag.is_set(): break
+                        if executed >= args.actions_per_policy_call: break
+
+                        step_start = time.perf_counter()
+                        try:
+                            if args.policy_action_mode == "relative_eef":
+                                delta_eef = a[:6]
+                                base_eef_axis = eef_euler2axis(eef_state)
+                                target_pose = base_eef_axis + delta_eef
+                                robot.move_to_pose(target_pose, blocking=False)
+                                robot.set_gripper(a[6], blocking=False)
+                            elif args.policy_action_mode == "absolute_eef":
+                                target_pose = a[:6]
+                                robot.move_to_pose(target_pose, blocking=False)
+                                robot.set_gripper(a[6], blocking=False)
+                            elif args.policy_action_mode == "joint_positions":
+                                target_joints = a[:6]
+                                robot.move_to_joint_positions(target_joints, blocking=False)
+                                robot.set_gripper(a[6], blocking=False)
+                        except Exception as e:
+                            print(f"[Main] Robot control error: {e}")
+                            stop_flag.set()
                             break
 
-                        # Get current robot state
-                        try:
-                            all_state = robot.get_state()
-                        except Exception as e:
-                            time.sleep(0.1)
-                            continue
-
-                        eef_state = all_state["end_effector_pose"]
-
-                        if args.policy_proprio_mode == "joints_positions":
-                            joint_state = all_state["joint_states"]
-                            gripper_state = all_state["gripper_state"]
-                            input_state = np.concatenate([joint_state, gripper_state[1:]])
-                        else:
-                            gripper_state = all_state["gripper_state"]
-                            input_state = np.concatenate(
-                                [eef_euler2axis(eef_state), gripper_state[1:]]
-                            )
-
-                        # Capture fresh images for this policy call
-                        head_img = head_cam.capture_image()
-                        wrist_img = wrist_cam.capture_image()
-                        if head_img is None or wrist_img is None:
-                            time.sleep(0.1)
-                            continue
-
-                        # === BUFFERING: Save images to send to observer later ===
-                        head_img_buffer.append(head_img)
-                        wrist_img_buffer.append(wrist_img)
-
-                        # Resize images for policy
-                        head_img_p = image_tools.convert_to_uint8(
-                            image_tools.resize_with_pad(head_img, 224, 224)
-                        )
-                        wrist_img_p = image_tools.convert_to_uint8(
-                            image_tools.resize_with_pad(wrist_img, 224, 224)
-                        )
-
-                        observation = {
-                            "observation/state": input_state,
-                            "observation/image": head_img_p,
-                            "observation/wrist_image": wrist_img_p,
-                            "prompt": current_policy_prompt,
-                        }
-
-                        # Call policy
-                        try:
-                            result = policy_client.infer(observation)
-                            actions = result["actions"]
-                        except Exception as e:
-                            continue
-
-                        if trace_writer is not None:
-                            trace_writer.enqueue(
-                                head_image=head_img_p,
-                                wrist_image=wrist_img_p,
-                                state=input_state,
-                                task_description=current_policy_prompt,
-                                actions=actions,
-                            )
-
-                        # Execute actions
-                        executed = 0
-                        for a in actions:
-                            if stop_flag.is_set(): break
-                            if executed >= args.actions_per_policy_call: break
-
-                            step_start = time.perf_counter()
-                            try:
-                                if args.policy_action_mode == "relative_eef":
-                                    delta_eef = a[:6]
-                                    base_eef_axis = eef_euler2axis(eef_state)
-                                    target_pose = base_eef_axis + delta_eef
-                                    robot.move_to_pose(target_pose, blocking=False)
-                                    robot.set_gripper(a[6], blocking=False)
-                                elif args.policy_action_mode == "absolute_eef":
-                                    target_pose = a[:6]
-                                    robot.move_to_pose(target_pose, blocking=False)
-                                    robot.set_gripper(a[6], blocking=False)
-                                elif args.policy_action_mode == "joint_positions":
-                                    target_joints = a[:6]
-                                    robot.move_to_joint_positions(target_joints, blocking=False)
-                                    robot.set_gripper(a[6], blocking=False)
-                            except Exception as e:
-                                print(f"[Main] Robot control error: {e}")
-                                stop_flag.set()
-                                break
-
-                            executed += 1
-                            total_actions_executed += 1
-                            elapsed = time.perf_counter() - step_start
-                            sleep_t = dt - elapsed
-                            if sleep_t > 0: time.sleep(sleep_t)
+                        executed += 1
+                        total_actions_executed += 1
+                        elapsed = time.perf_counter() - step_start
+                        sleep_t = dt - elapsed
+                        if sleep_t > 0: time.sleep(sleep_t)
             else:
                 # Task is done, robot idle
                 if not last_reported_done_state:
@@ -670,14 +678,28 @@ def main():
 
                 cur_subtask = step_resp.get("current_subtask_description")
                 prev_subtask = current_policy_prompt
-
-                if isinstance(cur_subtask, str) and cur_subtask.strip():
-                    current_policy_prompt = cur_subtask.strip()
-                else:
-                    current_policy_prompt = args.task_prompt
+                next_server_subtask = cur_subtask.strip() if isinstance(cur_subtask, str) and cur_subtask.strip() else ""
 
                 prev_done_state = task_is_done
                 task_is_done = step_resp.get("is_done", False)
+
+                if next_server_subtask:
+                    should_reset_for_switch = (
+                        args.reset_on_new_pick_place_subtask
+                        and not task_is_done
+                        and is_pick_place_subtask(next_server_subtask)
+                        and next_server_subtask != last_server_subtask
+                    )
+                    last_server_subtask = next_server_subtask
+                    if should_reset_for_switch:
+                        pending_reset_subtask = next_server_subtask
+                        current_policy_prompt = next_server_subtask
+                        print("\n[Main] ↻ New pick-and-place subtask detected.")
+                        print(f"[Main] → Will reset once before executing: '{next_server_subtask}'")
+                    else:
+                        current_policy_prompt = next_server_subtask
+                else:
+                    current_policy_prompt = args.task_prompt
 
                 if prev_done_state != task_is_done or prev_subtask != current_policy_prompt:
                     print(f"\n[TaskServer] Done: {task_is_done}")

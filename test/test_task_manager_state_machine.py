@@ -156,6 +156,59 @@ class FakeEchoImagePathsPlannerAgent(FakePlannerAgent):
         )
 
 
+class FakeSameSubtaskPlannerAgent(FakePlannerAgent):
+    def run_refine(
+        self,
+        *,
+        image_paths,
+        initial_plan_list,
+        user_instruction,
+        **kwargs,
+    ):
+        self.calls.append(
+            {
+                "initial_plan_list": initial_plan_list,
+                "user_instruction": user_instruction,
+                "image_count": len(image_paths or []),
+                "image_paths": list(image_paths or []),
+            }
+        )
+        return SimpleNamespace(
+            plan_text="[current] pick up the toy croissant from the left plate and place it in the box",
+            summary="same subtask",
+            raw_xml="<planner/>",
+            memory_operations=[],
+        )
+
+
+class FakeAdvanceByIndexPlannerAgent(FakePlannerAgent):
+    def run_refine(
+        self,
+        *,
+        image_paths,
+        initial_plan_list,
+        user_instruction,
+        **kwargs,
+    ):
+        self.calls.append(
+            {
+                "initial_plan_list": initial_plan_list,
+                "user_instruction": user_instruction,
+                "image_count": len(image_paths or []),
+                "image_paths": list(image_paths or []),
+            }
+        )
+        return SimpleNamespace(
+            plan_text=(
+                "[done] pick up the toy croissant from the left plate and place it in the box\n"
+                "[current] pick up the toy croissant from the left plate and place it in the box"
+            ),
+            summary="advance by plan index",
+            raw_xml="<planner/>",
+            memory_operations=[],
+        )
+
+
 class FakeAlwaysSlowPlannerAgent(FakePlannerAgent):
     def run_refine(
         self,
@@ -436,6 +489,85 @@ class TaskManagerStateMachineTest(unittest.TestCase):
 
         expected = state.image_paths[-8:]
         self.assertEqual(planner.calls[-1]["image_paths"], expected)
+
+    def test_same_subtask_keeps_existing_segment_start_idx(self):
+        manager = ServerTaskManager()
+        planner = FakeSameSubtaskPlannerAgent()
+        observer = FakeObserverAgent(statuses=["done"])
+        manager.set_agents(planner, observer)
+
+        cfg = TaskConfig(
+            use_observer=True,
+            use_memory=True,
+            planner_execution_mode="sync",
+            planner_image_mode="segment",
+            observer_window_size=4,
+        )
+        state = manager.create_task(
+            global_instruction="initial",
+            initial_robot_input=RobotImageInput(waist_image=_make_img(), image=_make_img()),
+            config=cfg,
+        )
+
+        state.plan_list = "[current] pick up the toy croissant from the left plate and place it in the box"
+        state.current_subtask_description = "pick up the toy croissant from the left plate and place it in the box"
+        state.current_subtask_start_idx = 1
+
+        manager.add_step_and_maybe_refine_robot(
+            state.task_id,
+            RobotImageInput(
+                waist_image=[_make_img((i, i, i)) for i in range(4)],
+                image=[_make_img((i + 20, i + 20, i + 20)) for i in range(4)],
+            ),
+        )
+
+        updated = manager._get_task(state.task_id)
+        self.assertEqual(
+            updated.current_subtask_description,
+            "pick up the toy croissant from the left plate and place it in the box",
+        )
+        self.assertEqual(updated.current_subtask_start_idx, 1)
+
+    def test_old_current_index_becoming_done_advances_segment_start_idx(self):
+        manager = ServerTaskManager()
+        planner = FakeAdvanceByIndexPlannerAgent()
+        observer = FakeObserverAgent(statuses=["done"])
+        manager.set_agents(planner, observer)
+
+        cfg = TaskConfig(
+            use_observer=True,
+            use_memory=True,
+            planner_execution_mode="sync",
+            planner_image_mode="segment",
+            observer_window_size=4,
+        )
+        state = manager.create_task(
+            global_instruction="initial",
+            initial_robot_input=RobotImageInput(waist_image=_make_img(), image=_make_img()),
+            config=cfg,
+        )
+
+        state.plan_list = (
+            "[current] pick up the toy croissant from the left plate and place it in the box\n"
+            "[pending] pick up the toy croissant from the left plate and place it in the box"
+        )
+        state.current_subtask_description = "pick up the toy croissant from the left plate and place it in the box"
+        state.current_subtask_start_idx = 1
+
+        manager.add_step_and_maybe_refine_robot(
+            state.task_id,
+            RobotImageInput(
+                waist_image=[_make_img((i, i, i)) for i in range(4)],
+                image=[_make_img((i + 20, i + 20, i + 20)) for i in range(4)],
+            ),
+        )
+
+        updated = manager._get_task(state.task_id)
+        self.assertEqual(
+            updated.current_subtask_description,
+            "pick up the toy croissant from the left plate and place it in the box",
+        )
+        self.assertEqual(updated.current_subtask_start_idx, len(updated.image_paths))
 
 
 if __name__ == "__main__":
