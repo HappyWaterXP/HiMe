@@ -575,16 +575,13 @@ def main():
                             [eef_euler2axis(eef_state), gripper_state[1:]]
                         )
 
-                    # Capture fresh images for this policy call
+                    # Capture fresh images for this policy call as policy input.
+                    # These are pre-action observations and should not be sent to the task server.
                     head_img = head_cam.capture_image()
                     wrist_img = wrist_cam.capture_image()
                     if head_img is None or wrist_img is None:
                         time.sleep(0.1)
                         continue
-
-                    # === BUFFERING: Save images to send to observer later ===
-                    head_img_buffer.append(head_img)
-                    wrist_img_buffer.append(wrist_img)
 
                     # Resize images for policy
                     head_img_p = image_tools.convert_to_uint8(
@@ -649,6 +646,14 @@ def main():
                         elapsed = time.perf_counter() - step_start
                         sleep_t = dt - elapsed
                         if sleep_t > 0: time.sleep(sleep_t)
+
+                    # Capture post-action images for server/planner.
+                    # These should reflect the state after this policy call's action chunk.
+                    post_head_img = head_cam.capture_image()
+                    post_wrist_img = wrist_cam.capture_image()
+                    if post_head_img is not None and post_wrist_img is not None:
+                        head_img_buffer.append(post_head_img)
+                        wrist_img_buffer.append(post_wrist_img)
             else:
                 # Task is done, robot idle
                 if not last_reported_done_state:
