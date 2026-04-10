@@ -9,19 +9,19 @@ Usage:
 """
 
 # Planner (independent)
-PLANNER_OPENAI_API_KEY = "xx-planner"
-PLANNER_OPENAI_BASE_URL = "https://planner.example.com/v1"
-PLANNER_VLM_MODEL = "qwen3-vl-30b-a3b-instruct"
+PLANNER_OPENAI_API_KEY = ""
+PLANNER_OPENAI_BASE_URL = ""
+PLANNER_VLM_MODEL = ""
 
 # Observer (independent)
-OBSERVER_OPENAI_API_KEY = "xx-observer"
-OBSERVER_OPENAI_BASE_URL = "https://observer.example.com/v1"
-OBSERVER_VLM_MODEL = "qwen3-vl-8b-instruct"
+OBSERVER_OPENAI_API_KEY = ""
+OBSERVER_OPENAI_BASE_URL = ""
+OBSERVER_VLM_MODEL = ""
 
 # Embedding (independent)
-EMBEDDING_OPENAI_API_KEY = "xx-embedding"
-EMBEDDING_OPENAI_BASE_URL = "https://embedding.example.com/v1"
-EMBEDDING_MODEL = "text-embedding-3-large"
+EMBEDDING_OPENAI_API_KEY = ""
+EMBEDDING_OPENAI_BASE_URL = ""
+EMBEDDING_MODEL = ""
 # Embedding vector dimension:
 # - 0: auto infer from embedding API response dimension (recommended)
 # - >0: enforce / normalize to fixed dimension

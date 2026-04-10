@@ -11,13 +11,13 @@
 
 Startup Commands:
     1) Start app first:
-       uv run uvicorn server.app:app --host 0.0.0.0 --port 8000
+       uv run uvicorn server.app:app --host 0.0.0.0 --port <PORT>
 
     2) Then start widow infer client:
        uv run python widow/infer.py \
-           --task_server_base_url http://127.0.0.1:8000 \
-           --policy_host 192.168.1.103 \
-           --policy_port 8000 \
+           --task_server_base_url <TASK_SERVER_BASE_URL> \
+           --policy_host <POLICY_HOST> \
+           --policy_port <POLICY_PORT> \
            --policy_trace_npz_folder ./_policy_traces
 """
 
@@ -28,16 +28,18 @@ from pydantic import BaseModel
 from typing import Optional, List
 from PIL import Image
 import io
+import json
 import os
 import openai
 from pathlib import Path
+import re
 
 from .task_manager import ServerTaskManager
 from .schema import TaskConfig, TaskRuntimeState, TaskStateEnum
 from .image_utils import RobotImageInput
 from .config import load_server_model_config
 from .ablation import load_ablation_setting
-from .task_state import load_task_state_json
+from .task_state import fork_task_state_for_resume, load_task_state_json
 # VLM client & agents
 from client.base_vlm_client import BaseVLMClient
 from client.planner_vlm import PlannerVLM
@@ -51,7 +53,44 @@ app = FastAPI()
 task_manager = ServerTaskManager()
 
 
-def load_memory_from_resume_dir(resume_dir: str, encoder: OpenAIEmbeddingEncoder) -> MultiTagMemory:
+def _round_number_from_round_filename(path: Path) -> Optional[int]:
+    m = re.match(r"round_(\d+)_", path.name)
+    return int(m.group(1)) if m else None
+
+
+def _select_snapshot_by_round(
+    files: List[Path],
+    *,
+    target_round: Optional[int],
+    round_field: Optional[str] = None,
+) -> Path:
+    if not files:
+        raise FileNotFoundError("No snapshot files found")
+    if target_round is None:
+        return files[-1]
+
+    if round_field:
+        for p in files:
+            try:
+                data = json.loads(p.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if int(data.get(round_field, -1)) == target_round:
+                return p
+
+    ordered = sorted(files, key=lambda p: p.stat().st_mtime)
+    idx = target_round - 1
+    if 0 <= idx < len(ordered):
+        return ordered[idx]
+    raise FileNotFoundError(f"No snapshot found for round {target_round}")
+
+
+def load_memory_from_resume_dir(
+    resume_dir: str,
+    encoder: OpenAIEmbeddingEncoder,
+    *,
+    target_round: Optional[int] = None,
+) -> MultiTagMemory:
     """
     Resume memory from a task logs folder.
     Source:
@@ -69,12 +108,12 @@ def load_memory_from_resume_dir(resume_dir: str, encoder: OpenAIEmbeddingEncoder
         raise FileNotFoundError(
             f"No memory snapshot found under {resume_dir} (expected */memory/memory_round_*.json)"
         )
-    latest = snapshot_files[-1]
-    print(f"[App] 📂 Resuming memory from snapshot: {latest}")
-    return MultiTagMemory.resume_from_json(str(latest), encoder)
+    selected = _select_snapshot_by_round(snapshot_files, target_round=target_round)
+    print(f"[App] 📂 Resuming memory from snapshot: {selected}")
+    return MultiTagMemory.resume_from_json(str(selected), encoder)
 
 
-def load_task_state_from_resume_dir(resume_dir: str) -> TaskRuntimeState:
+def load_task_state_from_resume_dir(resume_dir: str, *, target_round: Optional[int] = None) -> TaskRuntimeState:
     """
     Resume task runtime state from a task logs folder.
     Source:
@@ -84,16 +123,37 @@ def load_task_state_from_resume_dir(resume_dir: str) -> TaskRuntimeState:
     if not base.exists():
         raise FileNotFoundError(f"TASK_RESUME_DIR not found: {resume_dir}")
 
-    snapshot_files = sorted(
-        p for p in base.rglob("latest_task_state.json") if p.parent.name == "task_state"
-    )
-    if not snapshot_files:
-        raise FileNotFoundError(
-            f"No task state snapshot found under {resume_dir} (expected */task_state/latest_task_state.json)"
+    if target_round is None:
+        snapshot_files = sorted(
+            p for p in base.rglob("latest_task_state.json") if p.parent.name == "task_state"
         )
-    latest = snapshot_files[-1]
-    print(f"[App] 📂 Resuming task state from snapshot: {latest}")
-    return load_task_state_json(str(latest))
+        if not snapshot_files:
+            raise FileNotFoundError(
+                f"No task state snapshot found under {resume_dir} (expected */task_state/latest_task_state.json)"
+            )
+        selected = snapshot_files[-1]
+    else:
+        snapshot_files = sorted(
+            p
+            for p in base.rglob("task_state_*.json")
+            if p.parent.name == "task_state" and p.name != "latest_task_state.json"
+        )
+        if not snapshot_files:
+            raise FileNotFoundError(
+                f"No task state snapshots found under {resume_dir} for round-based resume "
+                f"(expected */task_state/task_state_*.json)"
+            )
+        selected = _select_snapshot_by_round(
+            snapshot_files,
+            target_round=target_round,
+            round_field="planner_round_number",
+        )
+    print(f"[App] 📂 Resuming task state from snapshot: {selected}")
+    restored = load_task_state_json(str(selected))
+    resumed_root = str(base.parent if base.name.startswith("task_") else base)
+    forked = fork_task_state_for_resume(restored, root=resumed_root)
+    print(f"[App] 🌿 Forked resumed task into new task_id={forked.task_id}")
+    return forked
 
 
 def init_agents_once() -> None:
@@ -109,6 +169,12 @@ def init_agents_once() -> None:
         return
 
     cfg = load_server_model_config()
+    planner_round_fallback_max_images = int(
+        os.environ.get("PLANNER_ROUND_FALLBACK_MAX_IMAGES", "50").strip() or "50"
+    )
+    default_observer_window_size = int(
+        os.environ.get("OBSERVER_WINDOW_SIZE", "8").strip() or "8"
+    )
     planner_openai_client = openai.OpenAI(
         api_key=cfg.planner_api_key,
         base_url=cfg.planner_base_url,
@@ -120,7 +186,7 @@ def init_agents_once() -> None:
 
     ablation = load_ablation_setting()
     prompt_name = os.environ.get("PLANNER_PROMPT_NAME", "").strip() or ablation.prompt_name
-    observer_prompt_name = os.environ.get("OBSERVER_PROMPT_NAME", "").strip() or "observer"
+    observer_prompt_name = os.environ.get("OBSERVER_PROMPT_NAME", "").strip() or "task3_obs"
     memory_op_policy = os.environ.get("PLANNER_MEMORY_OP_POLICY", "").strip() or ablation.memory_op_policy
     memory_mode = os.environ.get("PLANNER_MEMORY_MODE", "").strip() or ablation.memory_mode
     memory_max_records_raw = os.environ.get("PLANNER_MEMORY_MAX_RECORDS", "").strip()
@@ -135,6 +201,8 @@ def init_agents_once() -> None:
     print(f"[App] Planner memory_mode={memory_mode}")
     print(f"[App] Planner memory_max_records={memory_max_records}")
     print(f"[App] Planner image_mode={ablation.planner_image_mode}")
+    print(f"[App] Planner round_fallback_max_images={planner_round_fallback_max_images}")
+    print(f"[App] Observer window_size={default_observer_window_size}")
     print(
         f"[App] Planner model={cfg.planner_model}, planner_base_url={cfg.planner_base_url}"
     )
@@ -156,6 +224,8 @@ def init_agents_once() -> None:
 
     # Shared memory instance (persisted across tasks during runtime)
     task_resume_dir = os.environ.get("TASK_RESUME_DIR", "").strip()
+    task_resume_round_raw = os.environ.get("TASK_RESUME_ROUND", "").strip()
+    task_resume_round = int(task_resume_round_raw) if task_resume_round_raw else None
     memory_resume_dir = os.environ.get("MEMORY_RESUME_DIR", "").strip()
     effective_memory_resume_dir = memory_resume_dir or task_resume_dir
     embedding_encoder = OpenAIEmbeddingEncoder(
@@ -167,7 +237,11 @@ def init_agents_once() -> None:
 
     if effective_memory_resume_dir:
         try:
-            multitag_memory = load_memory_from_resume_dir(effective_memory_resume_dir, embedding_encoder)
+            multitag_memory = load_memory_from_resume_dir(
+                effective_memory_resume_dir,
+                embedding_encoder,
+                target_round=task_resume_round,
+            )
             multitag_memory.set_max_records(memory_max_records)
             print(f"[App] ✅ Memory resumed: {len(multitag_memory.all())} records loaded")
         except Exception as e:
@@ -194,7 +268,7 @@ def init_agents_once() -> None:
 
     if task_resume_dir:
         try:
-            resumed_state = load_task_state_from_resume_dir(task_resume_dir)
+            resumed_state = load_task_state_from_resume_dir(task_resume_dir, target_round=task_resume_round)
             task_manager.add_resumed_task(resumed_state)
             print(f"[App] ✅ Task resumed: task_id={resumed_state.task_id}")
         except Exception as e:
@@ -336,13 +410,21 @@ async def create_task(
     effective_use_observer = ablation.use_observer if use_observer is None else use_observer
     effective_use_memory = ablation.use_memory if use_memory is None else use_memory
 
+    planner_round_fallback_max_images = int(
+        os.environ.get("PLANNER_ROUND_FALLBACK_MAX_IMAGES", "50").strip() or "50"
+    )
+    server_observer_window_size = int(
+        os.environ.get("OBSERVER_WINDOW_SIZE", "").strip() or observer_window_size
+    )
+
     cfg = TaskConfig(
-        observer_window_size=observer_window_size,
+        observer_window_size=server_observer_window_size,
         human_intervene_for_planner=human_intervene_for_planner,
         use_observer=effective_use_observer,
         use_memory=effective_use_memory,
         planner_execution_mode=planner_execution_mode,
         planner_image_mode=ablation.planner_image_mode,
+        planner_round_fallback_max_images=planner_round_fallback_max_images,
     )
 
     # RobotImageInput for create_task usually takes single images (start state)

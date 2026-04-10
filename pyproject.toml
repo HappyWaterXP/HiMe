@@ -1,5 +1,5 @@
 [project]
-name = "mem-vla"
+name = "Hime"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
@@ -14,11 +14,3 @@ dependencies = [
     "socksio>=1.0.0",
     "uvicorn>=0.40.0",
 ]
-
-[[tool.uv.index]]
-url = "http://nexus.sii.shaipower.online/repository/pypi/simple"
-default = true
-
-[[tool.uv.index]]
-name = "tencent"
-url = "https://mirrors.cloud.tencent.com/pypi/simple/"

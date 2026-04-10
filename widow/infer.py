@@ -1,11 +1,20 @@
 #!/usr/bin/env python3
 """Widow robot inference client.
 
+This script is an example client implementation that connects a robot policy
+to the task server. It:
+1) Creates a task with initial observations.
+2) Sends step image sequences during execution.
+3) Optionally sends user instructions while running.
+
+You must adapt this file to match your real robot deployment (camera drivers,
+policy interface, and control loop).
+
 Startup Command:
     uv run python widow/infer.py \
-        --task_server_base_url http://127.0.0.1:8000 \
-        --policy_host 192.168.1.103 \
-        --policy_port 8000 \
+        --task_server_base_url <TASK_SERVER_BASE_URL> \
+        --policy_host <POLICY_HOST> \
+        --policy_port <POLICY_PORT> \
         --policy_trace_npz_folder ./_policy_traces
 """
 from __future__ import annotations
@@ -16,6 +25,7 @@ import os
 import threading
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from queue import Empty, Full, Queue
 from typing import Optional, Dict, Any, List
 
@@ -48,7 +58,7 @@ def eef_euler2axis(eef_pose: np.ndarray) -> np.ndarray:
 
 @dataclass
 class RobotClientConfig:
-    base_url: str = "http://localhost:8000"
+    base_url: str = ""
     timeout: int = 180
     observer_window_size: int = 8
     human_intervene_for_planner: bool = False
@@ -56,10 +66,28 @@ class RobotClientConfig:
 
 
 class RobotClient:
-    """Robot-side HTTP client: sends images and config to task server."""
+    """HTTP client for the task server.
+
+    API surface used here:
+    - POST /tasks
+      - form fields:
+        global_instruction, observer_window_size, human_intervene_for_planner,
+        planner_execution_mode
+      - files:
+        initial_image, initial_waist_image
+      - response: TaskPublicState
+    - POST /tasks/{task_id}/step
+      - files:
+        image[] (main camera sequence), waist_image[] (waist camera sequence)
+      - response: TaskPublicState
+    - GET /resume_state
+      - response: { has_resumed_task, task }
+    """
 
     def __init__(self, config: Optional[RobotClientConfig] = None):
         self.config = config or RobotClientConfig()
+        if not self.config.base_url:
+            raise ValueError("task server base_url is required")
         self.base_url = self.config.base_url.rstrip("/")
         self.timeout = self.config.timeout
 
@@ -88,7 +116,12 @@ class RobotClient:
         initial_image,
         initial_waist_image,
     ) -> Dict[str, Any]:
-        """POST /tasks: create task on server with initial images + instruction."""
+        """Create a task with initial images and the global instruction.
+
+        Returns a TaskPublicState dict with:
+        task_id, is_done, runtime_state, planner_status,
+        plan_list, summary, current_subtask_description.
+        """
         url = f"{self.base_url}/tasks"
 
         main_pil = self._to_pil(initial_image)
@@ -126,9 +159,10 @@ class RobotClient:
         images: List[Any],
         waist_images: List[Any],
     ) -> Dict[str, Any]:
-        """
-        POST /tasks/{task_id}/step: upload a SEQUENCE of observation images.
-        Modified to accept lists of images instead of single images.
+        """Send a sequence of images for a single robot step.
+
+        images and waist_images are lists in chronological order.
+        Returns a TaskPublicState dict.
         """
         url = f"{self.base_url}/tasks/{task_id}/step"
 
@@ -171,7 +205,7 @@ class RobotClient:
         return resp.json()
 
     def get_resume_state(self) -> Dict[str, Any]:
-        """GET /resume_state: inspect whether server already resumed a task."""
+        """Check whether the server has a resumed task state."""
         url = f"{self.base_url}/resume_state"
         resp = requests.get(url, timeout=self.timeout)
         resp.raise_for_status()
@@ -184,15 +218,23 @@ class RobotClient:
 
 @dataclass
 class UserClientConfig:
-    base_url: str = "http://localhost:8000"
+    base_url: str = ""
     timeout: int = 180
 
 
 class UserClient:
-    """Robot-side HTTP client: sends new user instructions to task server."""
+    """HTTP client for user instruction updates.
+
+    API surface:
+    - POST /tasks/{task_id}/user_instruction
+      - json: { "user_new_instruction": "<text>" }
+      - response: TaskPublicState
+    """
 
     def __init__(self, config: Optional[UserClientConfig] = None):
         self.config = config or UserClientConfig()
+        if not self.config.base_url:
+            raise ValueError("task server base_url is required")
         self.base_url = self.config.base_url.rstrip("/")
         self.timeout = self.config.timeout
 
@@ -213,7 +255,14 @@ def user_input_loop(
     user_client: UserClient,
     get_task_id,
     stop_flag: threading.Event,
+    reset_robot,
+    get_current_prompt,
+    save_current_views,
 ):
+    """Read user instructions from stdin and push to server.
+
+    This is optional and can be replaced with your own UI or tooling.
+    """
     print("\n" + "="*60)
     print("[UserInput] User input thread ready.")
     print("[UserInput] Enter instructions at any time, or 'quit' to exit.")
@@ -232,6 +281,27 @@ def user_input_loop(
             print("[UserInput] Exit command received.")
             stop_flag.set()
             break
+        if text.lower() == "reset":
+            cur_prompt = get_current_prompt() or ""
+            print("[UserInput] Reset command received. Calling robot.reset_to_home()...")
+            if cur_prompt:
+                print(f"[UserInput] Current instruction (unchanged): {cur_prompt}")
+            try:
+                reset_robot()
+                print("[UserInput] ✓ Reset complete.")
+            except Exception as e:
+                print(f"[UserInput] ✗ Reset failed: {e}")
+            continue
+        if text.lower() == "save":
+            print("[UserInput] Save command received. Capturing current third view and wrist view...")
+            try:
+                saved_paths = save_current_views()
+                print("[UserInput] ✓ Saved current views.")
+                print(f"[UserInput] Third view: {saved_paths['third_view']}")
+                print(f"[UserInput] Wrist view: {saved_paths['wrist_view']}")
+            except Exception as e:
+                print(f"[UserInput] ✗ Save failed: {e}")
+            continue
 
         task_id = get_task_id()
         if not task_id:
@@ -286,6 +356,10 @@ def save_policy_trace_npz(
 
 
 class AsyncPolicyTraceWriter:
+    """Background writer for policy trace buffers.
+
+    Saves trace arrays to disk without blocking the control loop.
+    """
     """Best-effort async writer to avoid blocking policy/action loop on disk I/O."""
 
     def __init__(self, output_root: str, task_id: str, max_queue: int = 256):
@@ -352,9 +426,14 @@ class AsyncPolicyTraceWriter:
 # ==========================
 
 def main():
+    """Main robot loop.
+
+    Connects to robot policy, captures camera frames, posts to server,
+    and executes the returned action plan.
+    """
     parser = argparse.ArgumentParser()
     # Low-level policy server
-    parser.add_argument("--policy_host", default="192.168.1.103")
+    parser.add_argument("--policy_host", default="")
     parser.add_argument("--policy_port", type=int, default=8000)
     parser.add_argument("--task_prompt", default="pick up a red flower, and place it in the vase on the left.")
     parser.add_argument("--control_hz", type=float, default=25.0)
@@ -377,7 +456,7 @@ def main():
                         choices=["relative_eef", "absolute_eef", "joint_positions"])
 
     # Task server
-    parser.add_argument("--task_server_base_url", default="http://localhost:8000")
+    parser.add_argument("--task_server_base_url", default="")
     parser.add_argument("--task_server_timeout", type=int, default=180)
     parser.add_argument("--observer_window_size", type=int, default=8)
     parser.add_argument("--human_intervene_for_planner", action="store_true")
@@ -401,6 +480,11 @@ def main():
         "--policy_trace_npz_dir",
         default="",
         help="Deprecated alias of --policy_trace_npz_folder",
+    )
+    parser.add_argument(
+        "--manual_save_dir",
+        default="./_manual_saves",
+        help="Directory for images captured via the `save` user command.",
     )
 
     args = parser.parse_args()
@@ -427,6 +511,33 @@ def main():
     )
     assert wrist_cam.connect(), "Failed to connect to wrist RealSense"
     assert wrist_cam.wait_for_image(5.0), "No image from wrist camera"
+    camera_lock = threading.Lock()
+
+    def capture_current_views() -> tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+        with camera_lock:
+            head_img = head_cam.capture_image()
+            wrist_img = wrist_cam.capture_image()
+        return head_img, wrist_img
+
+    def save_image_array(img: np.ndarray, path: str) -> None:
+        Image.fromarray(img).save(path)
+
+    def save_current_views() -> Dict[str, str]:
+        head_img, wrist_img = capture_current_views()
+        if head_img is None or wrist_img is None:
+            raise RuntimeError("Failed to capture one or both camera views")
+
+        save_dir = os.path.abspath(args.manual_save_dir)
+        os.makedirs(save_dir, exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        third_path = os.path.join(save_dir, f"{ts}_third_view.png")
+        wrist_path = os.path.join(save_dir, f"{ts}_wrist_view.png")
+        save_image_array(head_img, third_path)
+        save_image_array(wrist_img, wrist_path)
+        return {
+            "third_view": third_path,
+            "wrist_view": wrist_path,
+        }
 
     # 3. Connect to policy server
     policy_client = websocket_client_policy.WebsocketClientPolicy(
@@ -469,8 +580,7 @@ def main():
         print("  current_subtask:", init_resp.get("current_subtask_description"))
         print("  is_done:", init_resp.get("is_done"))
     else:
-        head0 = head_cam.capture_image()
-        wrist0 = wrist_cam.capture_image()
+        head0, wrist0 = capture_current_views()
         assert head0 is not None and wrist0 is not None, "Failed to grab initial images"
 
         init_resp = robot_client.create_task(
@@ -515,9 +625,16 @@ def main():
         with task_id_lock:
             return task_id
 
+    def reset_robot():
+        robot.reset_to_home()
+
+    def get_current_prompt() -> str:
+        # Read-only access for user thread; instruction is unchanged by reset.
+        return current_policy_prompt
+
     user_thread = threading.Thread(
         target=user_input_loop,
-        args=(user_client, get_task_id, stop_flag),
+        args=(user_client, get_task_id, stop_flag, reset_robot, get_current_prompt, save_current_views),
         daemon=True,
     )
     user_thread.start()
@@ -577,8 +694,7 @@ def main():
 
                     # Capture fresh images for this policy call as policy input.
                     # These are pre-action observations and should not be sent to the task server.
-                    head_img = head_cam.capture_image()
-                    wrist_img = wrist_cam.capture_image()
+                    head_img, wrist_img = capture_current_views()
                     if head_img is None or wrist_img is None:
                         time.sleep(0.1)
                         continue
@@ -649,8 +765,7 @@ def main():
 
                     # Capture post-action images for server/planner.
                     # These should reflect the state after this policy call's action chunk.
-                    post_head_img = head_cam.capture_image()
-                    post_wrist_img = wrist_cam.capture_image()
+                    post_head_img, post_wrist_img = capture_current_views()
                     if post_head_img is not None and post_wrist_img is not None:
                         head_img_buffer.append(post_head_img)
                         wrist_img_buffer.append(post_wrist_img)
@@ -661,8 +776,7 @@ def main():
                     last_reported_done_state = True
 
                 # If idle, we still need to capture one image to show the observer the current state
-                head_img = head_cam.capture_image()
-                wrist_img = wrist_cam.capture_image()
+                head_img, wrist_img = capture_current_views()
                 if head_img is not None and wrist_img is not None:
                     head_img_buffer.append(head_img)
                     wrist_img_buffer.append(wrist_img)

@@ -3,8 +3,8 @@
 Startup example:
 
     source ./env.sh
-    export MEMER_PROMPT_NAME="memer_task3_v2_aligned"
-    uv run uvicorn memer.app:app --host 0.0.0.0 --port 9000
+    export FLAT_MEMORY_PROMPT_NAME="<PROMPT_NAME>"
+    uv run uvicorn flat_memory.app:app --host 0.0.0.0 --port <PORT>
 """
 from __future__ import annotations
 
@@ -30,33 +30,44 @@ from prompt_loader import load_prompt
 # =========================================================
 # Config
 # =========================================================
-MEMER_API_KEY = os.environ.get("MEMER_OPENAI_API_KEY", "").strip() or "xx-memer"
-MEMER_BASE_URL = os.environ.get("MEMER_OPENAI_BASE_URL", "").strip() or "https://memer.example.com/v1"
-MODEL_NAME = os.environ.get("MEMER_MODEL_NAME", "").strip() or "qwen3-vl-30b-a3b-instruct"
-REQUEST_TIMEOUT_S = int(os.environ.get("MEMER_OPENAI_TIMEOUT_S", "180"))
+FLAT_MEMORY_API_KEY = os.environ.get("FLAT_MEMORY_OPENAI_API_KEY", "").strip()
+FLAT_MEMORY_BASE_URL = os.environ.get("FLAT_MEMORY_OPENAI_BASE_URL", "").strip()
+MODEL_NAME = os.environ.get("FLAT_MEMORY_MODEL_NAME", "").strip()
+REQUEST_TIMEOUT_S = int(os.environ.get("FLAT_MEMORY_OPENAI_TIMEOUT_S", "180"))
 
-MERGE_DISTANCE_D = int(os.environ.get("MEMER_MERGE_DISTANCE_D", "5"))
-MAX_KEYFRAMES = int(os.environ.get("MEMER_MAX_KEYFRAMES", "8"))
-RECENT_MAX = int(os.environ.get("MEMER_RECENT_MAX", "8"))
+MERGE_DISTANCE_D = int(os.environ.get("FLAT_MEMORY_MERGE_DISTANCE_D", "5"))
+MAX_KEYFRAMES = int(os.environ.get("FLAT_MEMORY_MAX_KEYFRAMES", "8"))
+RECENT_MAX = int(os.environ.get("FLAT_MEMORY_RECENT_MAX", "8"))
 
-COMPOSITE_LAYOUT = os.environ.get("MEMER_COMPOSITE_LAYOUT", "horizontal").lower()
-COMPOSITE_MAX_SIDE = int(os.environ.get("MEMER_COMPOSITE_MAX_SIDE", "0"))
+COMPOSITE_LAYOUT = os.environ.get("FLAT_MEMORY_COMPOSITE_LAYOUT", "horizontal").lower()
+COMPOSITE_MAX_SIDE = int(os.environ.get("FLAT_MEMORY_COMPOSITE_MAX_SIDE", "0"))
 
-LOG_ROOT = os.environ.get("MEMER_LOG_ROOT", "./memer_logs")
-SAVE_KEYFRAMES = os.environ.get("MEMER_SAVE_KEYFRAMES", "1") not in {"0", "false", "False"}
-SAVE_RECENT_FRAMES = os.environ.get("MEMER_SAVE_RECENT_FRAMES", "0") in {"1", "true", "True"}
-LOG_JSONL = os.environ.get("MEMER_LOG_JSONL", "1") not in {"0", "false", "False"}
-HISTORY_MEMORY_DIR = os.environ.get("MEMER_HISTORY_MEMORY_DIR", "").strip()
-MEMER_PROMPT_NAME = os.environ.get("MEMER_PROMPT_NAME", "").strip()
+LOG_ROOT = os.environ.get("FLAT_MEMORY_LOG_ROOT", "./flat_memory_logs")
+SAVE_KEYFRAMES = os.environ.get("FLAT_MEMORY_SAVE_KEYFRAMES", "1") not in {"0", "false", "False"}
+SAVE_RECENT_FRAMES = os.environ.get("FLAT_MEMORY_SAVE_RECENT_FRAMES", "0") in {"1", "true", "True"}
+LOG_JSONL = os.environ.get("FLAT_MEMORY_LOG_JSONL", "1") not in {"0", "false", "False"}
+HISTORY_MEMORY_DIR = os.environ.get("FLAT_MEMORY_HISTORY_MEMORY_DIR", "").strip()
+FLAT_MEMORY_PROMPT_NAME = os.environ.get("FLAT_MEMORY_PROMPT_NAME", "").strip()
 
-client = openai.OpenAI(
-    api_key=MEMER_API_KEY,
-    base_url=MEMER_BASE_URL,
-)
-app = FastAPI(title="MemER Action Server (client-aligned)", version="4.0-client-aligned")
-print(f"[MemER] Model={MODEL_NAME}, base_url={MEMER_BASE_URL}")
-if MEMER_PROMPT_NAME:
-    print(f"[MemER] Prompt={MEMER_PROMPT_NAME}")
+missing = []
+if not FLAT_MEMORY_API_KEY:
+    missing.append("FLAT_MEMORY_OPENAI_API_KEY")
+if not FLAT_MEMORY_BASE_URL:
+    missing.append("FLAT_MEMORY_OPENAI_BASE_URL")
+if not MODEL_NAME:
+    missing.append("FLAT_MEMORY_MODEL_NAME")
+if missing:
+    raise ValueError(
+        "Missing required Flat Memory config values: "
+        + ", ".join(missing)
+        + ". Set them via environment variables."
+    )
+
+client = openai.OpenAI(api_key=FLAT_MEMORY_API_KEY, base_url=FLAT_MEMORY_BASE_URL)
+app = FastAPI(title="Flat Memory Action Server (client-aligned)", version="4.0-client-aligned")
+print(f"[FlatMemory] Model={MODEL_NAME}, base_url={FLAT_MEMORY_BASE_URL}")
+if FLAT_MEMORY_PROMPT_NAME:
+    print(f"[FlatMemory] Prompt={FLAT_MEMORY_PROMPT_NAME}")
 
 # =========================================================
 # JSON extraction (tolerant)
@@ -156,20 +167,20 @@ def load_history_memory_keyframes_on_startup():
     """
     Load previous-memory keyframes from interaction logs directory.
 
-    Directory is controlled by MEMER_HISTORY_MEMORY_DIR.
+    Directory is controlled by FLAT_MEMORY_HISTORY_MEMORY_DIR.
     It reads events.jsonl and uses saved image paths in:
     - saved_keyframe_paths
     """
     keyframes_dir = HISTORY_MEMORY_DIR
     if not keyframes_dir:
-        print("[MemER] ℹ️  MEMER_HISTORY_MEMORY_DIR is empty, start with no history memory")
+        print("[FlatMemory] ℹ️  FLAT_MEMORY_HISTORY_MEMORY_DIR is empty, start with no history memory")
         return
 
     if not os.path.exists(keyframes_dir):
-        print(f"[MemER] ⚠️  History-memory dir not found: {keyframes_dir}")
+        print(f"[FlatMemory] ⚠️  History-memory dir not found: {keyframes_dir}")
         return
 
-    print(f"[MemER] 📂 Loading history-memory keyframes from logs: {keyframes_dir}")
+    print(f"[FlatMemory] 📂 Loading history-memory keyframes from logs: {keyframes_dir}")
 
     try:
         keyframe_paths: List[str] = []
@@ -216,7 +227,7 @@ def load_history_memory_keyframes_on_startup():
                 keyframe_paths.append(abs_path)
 
         if not keyframe_paths:
-            print(f"[MemER] ⚠️  No keyframe paths found in events logs under: {keyframes_dir}")
+            print(f"[FlatMemory] ⚠️  No keyframe paths found in events logs under: {keyframes_dir}")
             return
 
         loaded_count = 0
@@ -241,13 +252,13 @@ def load_history_memory_keyframes_on_startup():
                 loaded_count += 1
 
             except Exception as e:
-                print(f"[MemER] ❌ Failed to load history keyframe {p}: {e}")
+                print(f"[FlatMemory] ❌ Failed to load history keyframe {p}: {e}")
                 continue
 
-        print(f"[MemER] ✅ Loaded {loaded_count} history-memory keyframes")
+        print(f"[FlatMemory] ✅ Loaded {loaded_count} history-memory keyframes")
 
     except Exception as e:
-        print(f"[MemER] ❌ Failed to load history-memory keyframes: {e}")
+        print(f"[FlatMemory] ❌ Failed to load history-memory keyframes: {e}")
 
 
 # =========================================================
@@ -410,10 +421,10 @@ async def upload_to_pil_rgb(f: UploadFile) -> Image.Image:
 # Load history-memory keyframes on module import (server startup)
 # =========================================================
 load_history_memory_keyframes_on_startup()
-print(f"[MemER] ✅ History memory initialized: {len(HISTORY_MEMORY_KEYFRAME_IDS)} keyframes")
+print(f"[FlatMemory] ✅ History memory initialized: {len(HISTORY_MEMORY_KEYFRAME_IDS)} keyframes")
 
 # =========================================================
-# MemER helpers
+# Flat Memory helpers
 # =========================================================
 def median_of_sorted_list(xs: List[int]) -> int:
     return xs[len(xs) // 2]
@@ -456,8 +467,8 @@ def build_messages_for_action(global_instruction: str) -> Tuple[str, str]:
         "Each image is a COMPOSITE containing both main and wrist/waist views. Use both.\n"
         "Return JSON only. No markdown. No code fences.\n"
     )
-    if MEMER_PROMPT_NAME:
-        user_text = load_prompt(MEMER_PROMPT_NAME).format(
+    if FLAT_MEMORY_PROMPT_NAME:
+        user_text = load_prompt(FLAT_MEMORY_PROMPT_NAME).format(
             global_instruction=global_instruction
         )
         return system_text, user_text
@@ -589,7 +600,7 @@ async def create_task(
     - initial_waist_image, initial_image: 第一帧（必需）
 
     关键帧初始化：
-    - MEMER_HISTORY_MEMORY_DIR 非空时，先加载历史 memory 关键帧
+    - FLAT_MEMORY_HISTORY_MEMORY_DIR 非空时，先加载历史 memory 关键帧
     - 后续和新关键帧使用同一套维护流程
     """
     task_id = str(uuid.uuid4())
@@ -750,14 +761,14 @@ async def step(
     )
     ts.current_subtask_description = action
 
-    # MemER nominations: positions refer to recent_global window
+    # Flat Memory nominations: positions refer to recent_global window
     nominated_global_ids: List[int] = []
     for pos in keyframe_positions:
         if 1 <= pos <= len(recent_global):
             nominated_global_ids.append(recent_global[pos - 1].frame_id)
 
     ts.nominated_indices.extend(nominated_global_ids)
-    ts.nominated_indices = sorted(set(ts.nominated_indices))
+    ts.nominated_indices = sorted(ts.nominated_indices)
 
     # Unified maintenance pipeline for all keyframes
     selected_positive_ids = recompute_selected_keyframes(ts)

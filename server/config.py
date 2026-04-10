@@ -27,16 +27,16 @@ def load_server_model_config() -> ServerModelConfig:
     Priority:
     1) Environment variables (if set and non-empty)
     2) server/model_config.py
-    3) hardcoded safe defaults
+    3) otherwise raise with a clear message
     """
-    def env_or_py(env_name: str, py_val: str, default: str) -> str:
+    def env_or_py(env_name: str, py_val: str) -> str:
         env_val = os.environ.get(env_name, "").strip()
         if env_val:
             return env_val
         py_clean = (py_val or "").strip()
         if py_clean:
             return py_clean
-        return default
+        return ""
 
     def int_env_or_py(env_name: str, py_val: object, default: int) -> int:
         env_val = os.environ.get(env_name, "").strip()
@@ -52,35 +52,43 @@ def load_server_model_config() -> ServerModelConfig:
             pass
         return int(default)
 
-    planner_api_key = env_or_py(
-        "PLANNER_OPENAI_API_KEY", py_model_config.PLANNER_OPENAI_API_KEY, "xx-planner"
-    )
-    planner_base_url = env_or_py(
-        "PLANNER_OPENAI_BASE_URL", py_model_config.PLANNER_OPENAI_BASE_URL, "https://planner.example.com/v1"
-    )
-    planner_model = env_or_py(
-        "PLANNER_VLM_MODEL", py_model_config.PLANNER_VLM_MODEL, "qwen3-vl-30b-a3b-instruct"
-    )
+    planner_api_key = env_or_py("PLANNER_OPENAI_API_KEY", py_model_config.PLANNER_OPENAI_API_KEY)
+    planner_base_url = env_or_py("PLANNER_OPENAI_BASE_URL", py_model_config.PLANNER_OPENAI_BASE_URL)
+    planner_model = env_or_py("PLANNER_VLM_MODEL", py_model_config.PLANNER_VLM_MODEL)
 
-    observer_api_key = env_or_py(
-        "OBSERVER_OPENAI_API_KEY", py_model_config.OBSERVER_OPENAI_API_KEY, "xx-observer"
-    )
-    observer_base_url = env_or_py(
-        "OBSERVER_OPENAI_BASE_URL", py_model_config.OBSERVER_OPENAI_BASE_URL, "https://observer.example.com/v1"
-    )
-    observer_model = env_or_py(
-        "OBSERVER_VLM_MODEL", py_model_config.OBSERVER_VLM_MODEL, "qwen3-vl-8b-instruct"
-    )
-    embedding_api_key = env_or_py(
-        "EMBEDDING_OPENAI_API_KEY", py_model_config.EMBEDDING_OPENAI_API_KEY, "xx-embedding"
-    )
-    embedding_base_url = env_or_py(
-        "EMBEDDING_OPENAI_BASE_URL", py_model_config.EMBEDDING_OPENAI_BASE_URL, "https://embedding.example.com/v1"
-    )
-    embedding_model = env_or_py(
-        "EMBEDDING_MODEL", py_model_config.EMBEDDING_MODEL, "text-embedding-3-large"
-    )
+    observer_api_key = env_or_py("OBSERVER_OPENAI_API_KEY", py_model_config.OBSERVER_OPENAI_API_KEY)
+    observer_base_url = env_or_py("OBSERVER_OPENAI_BASE_URL", py_model_config.OBSERVER_OPENAI_BASE_URL)
+    observer_model = env_or_py("OBSERVER_VLM_MODEL", py_model_config.OBSERVER_VLM_MODEL)
+    embedding_api_key = env_or_py("EMBEDDING_OPENAI_API_KEY", py_model_config.EMBEDDING_OPENAI_API_KEY)
+    embedding_base_url = env_or_py("EMBEDDING_OPENAI_BASE_URL", py_model_config.EMBEDDING_OPENAI_BASE_URL)
+    embedding_model = env_or_py("EMBEDDING_MODEL", py_model_config.EMBEDDING_MODEL)
     embedding_dim = int_env_or_py("EMBEDDING_DIM", getattr(py_model_config, "EMBEDDING_DIM", 0), 0)
+
+    missing = []
+    if not planner_api_key:
+        missing.append("PLANNER_OPENAI_API_KEY")
+    if not planner_base_url:
+        missing.append("PLANNER_OPENAI_BASE_URL")
+    if not planner_model:
+        missing.append("PLANNER_VLM_MODEL")
+    if not observer_api_key:
+        missing.append("OBSERVER_OPENAI_API_KEY")
+    if not observer_base_url:
+        missing.append("OBSERVER_OPENAI_BASE_URL")
+    if not observer_model:
+        missing.append("OBSERVER_VLM_MODEL")
+    if not embedding_api_key:
+        missing.append("EMBEDDING_OPENAI_API_KEY")
+    if not embedding_base_url:
+        missing.append("EMBEDDING_OPENAI_BASE_URL")
+    if not embedding_model:
+        missing.append("EMBEDDING_MODEL")
+    if missing:
+        raise ValueError(
+            "Missing required model config values: "
+            + ", ".join(missing)
+            + ". Set them via environment variables or server/model_config.py."
+        )
 
     return ServerModelConfig(
         planner_api_key=planner_api_key,

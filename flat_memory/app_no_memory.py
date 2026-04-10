@@ -21,20 +21,31 @@ import openai
 # =========================================================
 # Config
 # =========================================================
-MEMER_API_KEY = os.environ.get("MEMER_OPENAI_API_KEY", "").strip() or "xx-memer"
-MEMER_BASE_URL = os.environ.get("MEMER_OPENAI_BASE_URL", "").strip() or "https://memer.example.com/v1"
-MODEL_NAME = os.environ.get("MEMER_MODEL_NAME", "").strip() or "qwen3-vl-30b-a3b-instruct"
-REQUEST_TIMEOUT_S = int(os.environ.get("MEMER_OPENAI_TIMEOUT_S", "180"))
+FLAT_MEMORY_API_KEY = os.environ.get("FLAT_MEMORY_OPENAI_API_KEY", "").strip()
+FLAT_MEMORY_BASE_URL = os.environ.get("FLAT_MEMORY_OPENAI_BASE_URL", "").strip()
+MODEL_NAME = os.environ.get("FLAT_MEMORY_MODEL_NAME", "").strip()
+REQUEST_TIMEOUT_S = int(os.environ.get("FLAT_MEMORY_OPENAI_TIMEOUT_S", "180"))
 
-COMPOSITE_LAYOUT = os.environ.get("MEMER_COMPOSITE_LAYOUT", "horizontal").lower()
-COMPOSITE_MAX_SIDE = int(os.environ.get("MEMER_COMPOSITE_MAX_SIDE", "1024"))
+COMPOSITE_LAYOUT = os.environ.get("FLAT_MEMORY_COMPOSITE_LAYOUT", "horizontal").lower()
+COMPOSITE_MAX_SIDE = int(os.environ.get("FLAT_MEMORY_COMPOSITE_MAX_SIDE", "1024"))
 
-client = openai.OpenAI(
-    api_key=MEMER_API_KEY,
-    base_url=MEMER_BASE_URL,
-)
-app = FastAPI(title="MemER Action Server (no-keyframes)", version="1.0-no-keyframes")
-print(f"[MemER-no-memory] Model={MODEL_NAME}, base_url={MEMER_BASE_URL}")
+missing = []
+if not FLAT_MEMORY_API_KEY:
+    missing.append("FLAT_MEMORY_OPENAI_API_KEY")
+if not FLAT_MEMORY_BASE_URL:
+    missing.append("FLAT_MEMORY_OPENAI_BASE_URL")
+if not MODEL_NAME:
+    missing.append("FLAT_MEMORY_MODEL_NAME")
+if missing:
+    raise ValueError(
+        "Missing required Flat Memory config values: "
+        + ", ".join(missing)
+        + ". Set them via environment variables."
+    )
+
+client = openai.OpenAI(api_key=FLAT_MEMORY_API_KEY, base_url=FLAT_MEMORY_BASE_URL)
+app = FastAPI(title="Flat Memory Action Server (no-keyframes)", version="1.0-no-keyframes")
+print(f"[FlatMemory-no-memory] Model={MODEL_NAME}, base_url={FLAT_MEMORY_BASE_URL}")
 
 # =========================================================
 # JSON extraction (tolerant)

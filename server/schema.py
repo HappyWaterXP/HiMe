@@ -41,7 +41,7 @@ class TaskConfig:
     human_intervene_for_planner: bool = False
 
     # Runtime switches for future extensions.
-    # Keep defaults on the baseline main path for maintainability.
+    # Keep defaults on the main path for maintainability.
     use_observer: bool = True
     use_memory: bool = True
 
@@ -55,6 +55,10 @@ class TaskConfig:
     # - recent_window: use the most recent contiguous frames from current subtask segment
     # - latest_frame: use only the most recent saved frame at trigger time
     planner_image_mode: Literal["segment", "recent_window", "latest_frame"] = "segment"
+
+    # If observer keeps returning not_done, trigger planner again after this many
+    # images have accumulated since the last planner round boundary.
+    planner_round_fallback_max_images: int = 50
 
 
 @dataclass

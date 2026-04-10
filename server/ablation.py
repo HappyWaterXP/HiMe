@@ -18,72 +18,72 @@ class AblationSetting:
 
 
 ABLATION_PROFILE_SETTINGS = {
-    "baseline": AblationSetting(
-        profile="baseline",
-        prompt_name="task3_v2",
+    "hime": AblationSetting(
+        profile="hime",
+        prompt_name="task3",
         use_observer=True,
         use_memory=True,
         memory_op_policy="allow_all",
         memory_mode="mixed",
         planner_image_mode="segment",
     ),
-    "baseline_wo_observer": AblationSetting(
-        profile="baseline_wo_observer",
-        prompt_name="task3_no_observer",
+    "hime_wo_sentry": AblationSetting(
+        profile="hime_wo_sentry",
+        prompt_name="task3_hime_wo_sentry",
         use_observer=False,
         use_memory=True,
         memory_op_policy="allow_all",
         memory_mode="mixed",
         planner_image_mode="recent_window",
     ),
-    "baseline_wo_memory": AblationSetting(
-        profile="baseline_wo_memory",
-        prompt_name="task3_no_memory",
+    "transient_memory": AblationSetting(
+        profile="transient_memory",
+        prompt_name="task3_transient_memory",
         use_observer=True,
         use_memory=False,
         memory_op_policy="disable_all",
         memory_mode="mixed",
         planner_image_mode="latest_frame",
     ),
-    "baseline_wo_memory_wo_observer": AblationSetting(
-        profile="baseline_wo_memory_wo_observer",
-        prompt_name="task3_no_memory_no_observer",
+    "transient_memory_wo_sentry": AblationSetting(
+        profile="transient_memory_wo_sentry",
+        prompt_name="task3_transient_memory_wo_sentry",
         use_observer=False,
         use_memory=False,
         memory_op_policy="disable_all",
         memory_mode="mixed",
         planner_image_mode="latest_frame",
     ),
-    "no_text_memory": AblationSetting(
-        profile="no_text_memory",
-        prompt_name="task3_no_text",
+    "only_image": AblationSetting(
+        profile="only_image",
+        prompt_name="task3_only_image",
         use_observer=True,
         use_memory=True,
         memory_op_policy="allow_all",
         memory_mode="image_only",
         planner_image_mode="segment",
     ),
-    "no_image_memory": AblationSetting(
-        profile="no_image_memory",
-        prompt_name="task3_no_image",
+    "only_text": AblationSetting(
+        profile="only_text",
+        prompt_name="task3_only_text",
         use_observer=True,
         use_memory=True,
         memory_op_policy="allow_all",
         memory_mode="text_only",
         planner_image_mode="segment",
     ),
-    "no_delete_update": AblationSetting(
-        profile="no_delete_update",
-        prompt_name="task3_no_delete_update",
+    "no_management": AblationSetting(
+        profile="no_management",
+        prompt_name="task3_no_management",
         use_observer=True,
         use_memory=True,
         memory_op_policy="query_create_only",
         memory_mode="mixed",
         planner_image_mode="segment",
     ),
-    "fifo": AblationSetting(
-        profile="fifo",
-        prompt_name="task3_fifo",
+    "FIFO": AblationSetting(
+        profile="FIFO",
+        prompt_name="task3_FIFO",
         use_observer=True,
         use_memory=True,
         memory_op_policy="query_create_only",
@@ -97,12 +97,23 @@ AVAILABLE_ABLATION_PROFILES = tuple(ABLATION_PROFILE_SETTINGS.keys())
 
 
 def load_ablation_setting() -> AblationSetting:
-    requested = os.environ.get("ABLATION_PROFILE", "baseline").strip() or "baseline"
+    requested_raw = os.environ.get("ABLATION_PROFILE", "hime").strip() or "hime"
+    alias_map = {
+        "baseline": "hime",
+        "baseline_wo_observer": "hime_wo_sentry",
+        "baseline_wo_memory": "transient_memory",
+        "baseline_wo_memory_wo_observer": "transient_memory_wo_sentry",
+        "no_text_memory": "only_image",
+        "no_image_memory": "only_text",
+        "no_delete_update": "no_management",
+        "fifo": "FIFO",
+    }
+    requested = alias_map.get(requested_raw, requested_raw)
     cfg = ABLATION_PROFILE_SETTINGS.get(requested)
     if cfg is None:
         print(
-            f"[Ablation] Unknown ABLATION_PROFILE='{requested}', fallback to 'baseline'. "
+            f"[Ablation] Unknown ABLATION_PROFILE='{requested}', fallback to 'hime'. "
             f"Available={list(AVAILABLE_ABLATION_PROFILES)}"
         )
-        cfg = ABLATION_PROFILE_SETTINGS["baseline"]
+        cfg = ABLATION_PROFILE_SETTINGS["hime"]
     return cfg

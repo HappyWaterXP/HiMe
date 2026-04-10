@@ -4,6 +4,7 @@
 - create_initial_task_state: allocate a new TaskRuntimeState with fresh dirs.
 - save_task_state_json: persist task runtime state at a planner-stable boundary.
 - load_task_state_json: restore task runtime state from a saved snapshot.
+- fork_task_state_for_resume: branch a restored task into a fresh task directory.
 """
 
 from __future__ import annotations
@@ -76,6 +77,7 @@ def save_task_state_json(state: TaskRuntimeState, filepath: str) -> str:
         "image_paths": list(state.image_paths),
         "config": asdict(state.config),
         "extra": dict(state.extra),
+        "planner_round_number": state.extra.get("last_completed_planner_round"),
     }
     Path(filepath).parent.mkdir(parents=True, exist_ok=True)
     with open(filepath, "w", encoding="utf-8") as f:
@@ -112,3 +114,32 @@ def load_task_state_json(filepath: str) -> TaskRuntimeState:
         config=config,
         extra=dict(data.get("extra", {})),
     )
+
+
+def fork_task_state_for_resume(state: TaskRuntimeState, root: str = "./_server_data") -> TaskRuntimeState:
+    """
+    Branch a restored task state into a new task directory for resume.
+
+    This keeps the logical task state and historical image references, but all newly
+    generated images/logs will be written under a fresh task_id/base_dir so that the
+    original task folder remains immutable and can be resumed again later.
+    """
+    original_task_id = state.task_id
+    original_base_dir = state.base_dir
+    original_images_dir = state.images_dir
+    original_logs_dir = state.logs_dir
+
+    dirs = make_task_dirs(root=root)
+    state.task_id = dirs["task_id"]
+    state.base_dir = dirs["base_dir"]
+    state.images_dir = dirs["images_dir"]
+    state.logs_dir = dirs["logs_dir"]
+    state.created_ts = time.time()
+    state.round_logger = None
+
+    state.extra = dict(state.extra)
+    state.extra["resumed_from_task_id"] = original_task_id
+    state.extra["resumed_from_base_dir"] = original_base_dir
+    state.extra["resumed_from_images_dir"] = original_images_dir
+    state.extra["resumed_from_logs_dir"] = original_logs_dir
+    return state

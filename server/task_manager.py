@@ -176,6 +176,7 @@ class ServerTaskManager:
         state.round_logger = RoundLogger(state.logs_dir)
         state.extra["planner_status"] = "idle"
         state.extra["planner_last_error"] = None
+        state.extra.setdefault("last_planner_round_image_idx", len(state.image_paths))
         self.tasks[state.task_id] = state
         print(f"[TaskManager] Resumed task {state.task_id}")
 
@@ -252,6 +253,7 @@ class ServerTaskManager:
             plan_text=res.plan_text or "",
             summary=res.summary or "",
         )
+        self._mark_planner_round_boundary(state)
         self._save_task_resume_snapshot(state)
         if state.is_done:
             print(f"[TaskManager] Task already complete")
@@ -407,8 +409,12 @@ class ServerTaskManager:
         # Stuck detection (check total steps in current subtask)
         # 注意：这里 full_segment 包含了刚刚加入的一整个 buffer，所以如果 buffer 很大，
         # 可能会立即触发 stuck 逻辑，这是符合预期的（动作太多了还没做完）
-        elif len(full_segment) > 50:
-            print(f"[TaskManager] Task maybe stuck (segment len {len(full_segment)} > 50), calling planner refine")
+        elif self._images_since_last_planner_round(state) > state.config.planner_round_fallback_max_images:
+            round_span = self._images_since_last_planner_round(state)
+            print(
+                f"[TaskManager] Task maybe stuck (since last planner round {round_span} > "
+                f"{state.config.planner_round_fallback_max_images}), calling planner refine"
+            )
             if self._is_async_mode(state):
                 self._schedule_async_plan_refresh(state, mode="update_plan")
             else:
@@ -490,6 +496,15 @@ class ServerTaskManager:
         if state.config.planner_image_mode == "recent_window":
             return self._collect_recent_segment_images(state, max_n=max_n)
         return self._collect_current_segment_images(state, max_n=max_n)
+
+    def _images_since_last_planner_round(self, state: TaskRuntimeState) -> int:
+        start = int(state.extra.get("last_planner_round_image_idx", 0) or 0)
+        return max(0, len(state.image_paths) - start)
+
+    def _mark_planner_round_boundary(self, state: TaskRuntimeState) -> None:
+        state.extra["last_planner_round_image_idx"] = len(state.image_paths)
+        if state.round_logger is not None:
+            state.extra["last_completed_planner_round"] = state.round_logger.round_counter
 
     def _planner_sees_history(self, state: TaskRuntimeState) -> bool:
         return state.config.use_memory
@@ -691,6 +706,7 @@ class ServerTaskManager:
             plan_text=res.plan_text or "",
             summary=res.summary or "",
         )
+        self._mark_planner_round_boundary(state)
         self._save_task_resume_snapshot(state)
         state.extra["planner_status"] = "idle"
         state.extra["planner_last_error"] = None
@@ -798,6 +814,7 @@ class ServerTaskManager:
             plan_text=res.plan_text or "",
             summary=res.summary or "",
         )
+        self._mark_planner_round_boundary(state)
         self._save_task_resume_snapshot(state)
 
     # ---------- Internal: planner refine without observer ----------
@@ -850,6 +867,7 @@ class ServerTaskManager:
             plan_text=res.plan_text or "",
             summary=res.summary or "",
         )
+        self._mark_planner_round_boundary(state)
         self._save_task_resume_snapshot(state)
         new_sub_desc = state.current_subtask_description
         if state.is_done:
@@ -933,6 +951,7 @@ class ServerTaskManager:
             plan_text=final_plan_text,
             summary=res.summary or "",
         )
+        self._mark_planner_round_boundary(state)
         self._save_task_resume_snapshot(state)
 
     # ---------- Internal: task lookup ----------

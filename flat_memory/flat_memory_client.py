@@ -1,12 +1,21 @@
 #!/usr/bin/env python3
-"""
-Startup example:
+"""Flat Memory + robot inference client.
 
+This script is an example client that combines the task server with Flat Memory.
+It:
+1) Creates a task with initial observations.
+2) Streams step image sequences to the task server.
+3) Optionally uses Flat Memory to refine action prompts.
+
+You must adapt this file to match your real robot deployment (camera drivers,
+policy interface, and control loop).
+
+Startup example:
     source ./env.sh
-    uv run python memer/memer_client.py \
-        --server_url http://127.0.0.1:9000 \
-        --policy_host 192.168.1.103 \
-        --policy_port 8000 \
+    uv run python flat_memory/flat_memory_client.py \
+        --server_url <FLAT_MEMORY_SERVER_URL> \
+        --policy_host <POLICY_HOST> \
+        --policy_port <POLICY_PORT> \
         --task_prompt "put all toys in the box"
 """
 from __future__ import annotations
@@ -49,17 +58,32 @@ def eef_euler2axis(eef_pose: np.ndarray) -> np.ndarray:
 
 @dataclass
 class RobotClientConfig:
-    base_url: str = "http://localhost:8000"
+    base_url: str = ""
     timeout: int = 180
     observer_window_size: int = 8
     human_intervene_for_planner: bool = False
 
 
 class RobotClient:
-    """Robot-side HTTP client: sends images and config to task server."""
+    """HTTP client for the task server.
+
+    API surface used here:
+    - POST /tasks
+      - form fields:
+        global_instruction, observer_window_size, human_intervene_for_planner
+      - files:
+        initial_image, initial_waist_image
+      - response: TaskPublicState
+    - POST /tasks/{task_id}/step
+      - files:
+        image[] (main camera sequence), waist_image[] (waist camera sequence)
+      - response: TaskPublicState
+    """
 
     def __init__(self, config: Optional[RobotClientConfig] = None):
         self.config = config or RobotClientConfig()
+        if not self.config.base_url:
+            raise ValueError("task server base_url is required")
         self.base_url = self.config.base_url.rstrip("/")
         self.timeout = self.config.timeout
 
@@ -88,7 +112,12 @@ class RobotClient:
         initial_image,
         initial_waist_image=None,
     ) -> Dict[str, Any]:
-        """POST /tasks: create task on server with initial images + instruction."""
+        """Create a task with initial images and the global instruction.
+
+        Returns a TaskPublicState dict with:
+        task_id, is_done, runtime_state, planner_status,
+        plan_list, summary, current_subtask_description.
+        """
         url = f"{self.base_url}/tasks"
 
         if initial_waist_image is None:
@@ -161,15 +190,23 @@ class RobotClient:
 
 @dataclass
 class UserClientConfig:
-    base_url: str = "http://localhost:8000"
+    base_url: str = ""
     timeout: int = 180
 
 
 class UserClient:
-    """Robot-side HTTP client: sends new user instructions to task server."""
+    """HTTP client for user instruction updates.
+
+    API surface:
+    - POST /tasks/{task_id}/user_instruction
+      - json: { "user_new_instruction": "<text>" }
+      - response: TaskPublicState
+    """
 
     def __init__(self, config: Optional[UserClientConfig] = None):
         self.config = config or UserClientConfig()
+        if not self.config.base_url:
+            raise ValueError("task server base_url is required")
         self.base_url = self.config.base_url.rstrip("/")
         self.timeout = self.config.timeout
 
@@ -191,6 +228,10 @@ def user_input_loop(
     get_task_id,
     stop_flag: threading.Event,
 ):
+    """Read user instructions from stdin and push to server.
+
+    This is optional and can be replaced with your own UI or tooling.
+    """
     print("\n" + "="*60)
     print("[UserInput] User input thread ready.")
     print("[UserInput] Enter instructions at any time, or 'quit' to exit.")
@@ -256,6 +297,10 @@ def save_policy_trace_npz(
 
 
 class AsyncPolicyTraceWriter:
+    """Background writer for policy trace buffers.
+
+    Saves trace arrays to disk without blocking the control loop.
+    """
     """Best-effort async writer to avoid blocking policy/action loop on disk I/O."""
 
     def __init__(self, output_root: str, task_id: str, max_queue: int = 256):
@@ -322,9 +367,14 @@ class AsyncPolicyTraceWriter:
 # ==========================
 
 def main():
+    """Main robot loop.
+
+    Connects to robot policy, captures camera frames, posts to server,
+    and executes the returned action plan.
+    """
     parser = argparse.ArgumentParser()
     # Low-level policy server
-    parser.add_argument("--policy_host", default="192.168.1.103")
+    parser.add_argument("--policy_host", default="")
     parser.add_argument("--policy_port", type=int, default=8000)
     parser.add_argument("--task_prompt", default="pick up a red flower, and place it in the vase on the left.")
     parser.add_argument("--control_hz", type=float, default=25.0)
@@ -347,7 +397,7 @@ def main():
                         choices=["relative_eef", "absolute_eef", "joint_positions"])
 
     # Task server
-    parser.add_argument("--task_server_base_url", default="http://localhost:8000")
+    parser.add_argument("--task_server_base_url", default="")
     parser.add_argument("--task_server_timeout", type=int, default=180)
     parser.add_argument("--observer_window_size", type=int, default=8)
     parser.add_argument("--human_intervene_for_planner", action="store_true")
