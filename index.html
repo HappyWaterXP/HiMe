@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="description"
+        content="HiMe: Hierarchical Embodied Memory for Long-Horizon Vision-Language-Action Control.">
+  <meta name="keywords" content="HiMe, VLA, Robotics, Memory, Planning">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HiMe: Hierarchical Embodied Memory for Long-Horizon VLA Control</title>
+
+  <link href="https://fonts.googleapis.com/css?family=Google+Sans|Noto+Sans|Castoro"
+        rel="stylesheet">
+
+  <link rel="stylesheet" href="./static/css/bulma.min.css">
+  <link rel="stylesheet" href="./static/css/bulma-carousel.min.css">
+  <link rel="stylesheet" href="./static/css/bulma-slider.min.css">
+  <link rel="stylesheet" href="./static/css/fontawesome.all.min.css">
+  <link rel="stylesheet"
+        href="https://cdn.jsdelivr.net/gh/jpswalsh/academicons@1/css/academicons.min.css">
+  <link rel="stylesheet" href="./static/css/index.css">
+  <link rel="icon" href="./static/images/favicon.svg">
+
+  <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+  <script defer src="./static/js/fontawesome.all.min.js"></script>
+  <script src="./static/js/bulma-carousel.min.js"></script>
+  <script src="./static/js/bulma-slider.min.js"></script>
+  <script src="./static/js/index.js"></script>
+</head>
+<body>
+
+<section class="hero">
+  <div class="hero-body">
+    <div class="container is-max-desktop">
+      <div class="columns is-centered">
+        <div class="column has-text-centered">
+          <h1 class="title is-1 publication-title">HiMe: Hierarchical Embodied Memory for Long-Horizon Vision-Language-Action Control</h1>
+          <div class="is-size-5 publication-authors">
+            <span class="author-block">Anonymous Authors</span>
+          </div>
+          <div class="is-size-5 publication-authors">
+            <span class="author-block">Anonymous Institution</span>
+          </div>
+
+          <div class="column has-text-centered">
+            <div class="publication-links">
+              <span class="link-block">
+                <a href="./static/HiMe.pdf"
+                   class="external-link button is-normal is-rounded is-dark">
+                  <span class="icon">
+                      <i class="fas fa-file-pdf"></i>
+                  </span>
+                  <span>Paper</span>
+                </a>
+              </span>
+              <span class="link-block">
+                <a href="https://arxiv.org/abs/XXXX.XXXXX"
+                   class="external-link button is-normal is-rounded is-dark">
+                  <span class="icon">
+                      <i class="ai ai-arxiv"></i>
+                  </span>
+                  <span>arXiv</span>
+                </a>
+              </span>
+              <span class="link-block">
+                <a href="https://github.com/HappyWaterXP/HiMe"
+                   class="external-link button is-normal is-rounded is-dark">
+                  <span class="icon">
+                      <i class="fab fa-github"></i>
+                  </span>
+                  <span>Code</span>
+                  </a>
+              </span>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="hero teaser">
+  <div class="container is-max-desktop">
+    <div class="hero-body">
+      <img src="./static/images/hime_overview.jpg" alt="HiMe overview figure">
+      <h2 class="subtitle has-text-centered">
+        HiMe decouples embodied intelligence into a high-frequency Executor, a progress-aware Sentry,
+        and a long-horizon Planner with explicit memory management.
+      </h2>
+    </div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="container is-max-desktop">
+    <div class="columns is-centered has-text-centered">
+      <div class="column is-four-fifths">
+        <h2 class="title is-3">Abstract</h2>
+        <div class="content has-text-justified">
+          <p>
+            Current Vision-Language-Action (VLA) models excel at robotic manipulation but often struggle
+            with non-Markovian tasks requiring long-term memory and reasoning due to their reliance on
+            immediate observations. Existing solutions face a “frequency-competence paradox,” where
+            high-performance models are too slow for real-time control, while faster models lack sufficient
+            reasoning capabilities. To resolve this architectural misalignment, we propose HiMe, a
+            Hierarchical Embodied Memory framework that decouples embodied intelligence into a
+            high-frequency Executor for execution, a Sentry for working memory, and a Planner for long-term
+            strategy. We also introduce a dynamic knowledge system based on cross-modal semantic schemas
+            and active management mechanisms, allowing robots to maintain memory plasticity through “Add,
+            Update, and Delete” operations. This hierarchical design effectively balances the conflict between
+            real-time execution and slow thinking planning, significantly improving success rates in long-horizon
+            tasks. Experiments demonstrate that this approach not only outperforms flat memory baselines but
+            also exhibits the novel ability to self-correct its internal knowledge based on human preferences.
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="container is-max-desktop">
+    <div class="columns is-centered">
+      <div class="column is-full-width">
+        <h2 class="title is-3">Method Overview</h2>
+        <div class="content has-text-justified">
+          <p>
+            HiMe organizes embodied intelligence into three functional layers with distinct temporal resolutions:
+            (1) the Executor performs high-frequency sensory-motor control, (2) the Sentry aggregates recent
+            observations and detects subtask transitions, and (3) the Planner performs long-horizon reasoning
+            with episodic memory. Memory is represented as a cross-modal knowledge system with explicit
+            Add/Update/Delete operations that keep the robot’s beliefs consistent over long tasks.
+          </p>
+        </div>
+        <div class="content has-text-centered">
+          <img src="./static/images/hime_results.jpg" alt="HiMe main results" width="85%">
+          <p><em>Main results on three long-horizon manipulation tasks.</em></p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="container is-max-desktop">
+    <div class="columns is-centered">
+      <div class="column is-full-width">
+        <h2 class="title is-3">Demos</h2>
+        <div class="columns is-multiline">
+          <div class="column is-one-third">
+            <div class="content">
+              <h3 class="title is-5">Object Search</h3>
+              <video controls muted playsinline width="100%">
+                <source src="./static/videos/object_search.mov" type="video/quicktime">
+              </video>
+            </div>
+          </div>
+          <div class="column is-one-third">
+            <div class="content">
+              <h3 class="title is-5">Counting</h3>
+              <video controls muted playsinline width="100%">
+                <source src="./static/videos/counting.mov" type="video/quicktime">
+              </video>
+            </div>
+          </div>
+          <div class="column is-one-third">
+            <div class="content">
+              <h3 class="title is-5">Rearrangement</h3>
+              <video controls muted playsinline width="100%">
+                <source src="./static/videos/rearrangement.mov" type="video/quicktime">
+              </video>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="BibTeX">
+  <div class="container is-max-desktop content">
+    <h2 class="title">BibTeX</h2>
+    <pre><code>@article{hime2026,
+  title   = {HiMe: Hierarchical Embodied Memory for Long-Horizon Vision-Language-Action Control},
+  author  = {Anonymous Authors},
+  journal = {Preprint},
+  year    = {2026}
+}</code></pre>
+  </div>
+</section>
+
+<footer class="footer">
+  <div class="container">
+    <div class="content has-text-centered">
+      <a class="icon-link" href="./static/HiMe.pdf">
+        <i class="fas fa-file-pdf"></i>
+      </a>
+      <a class="icon-link" href="https://github.com/HappyWaterXP/HiMe">
+        <i class="fab fa-github"></i>
+      </a>
+    </div>
+    <div class="columns is-centered">
+      <div class="column is-8">
+        <div class="content">
+          <p>
+            This website is built on the <a href="https://github.com/nerfies/nerfies.github.io">Nerfies</a>
+            project page template. We thank the authors for releasing the template.
+          </p>
+          <p>
+            This website is licensed under a <a rel="license"
+                                                href="http://creativecommons.org/licenses/by-sa/4.0/">Creative
+            Commons Attribution-ShareAlike 4.0 International License</a>.
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>
