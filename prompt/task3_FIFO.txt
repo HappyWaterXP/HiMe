@@ -42,7 +42,6 @@ Inputs:
 - Do not `CREATE` if the queried memory already contains an equivalent fact or preference that is still sufficient.
 - Remember the object's state or location, but do not create redundant memory.
 - When an object's state or location changes, preserve the old fact as history and create a new record.
-- UPDATE and DELETE are disabled in this setting.
 - One memory record may have:
   - no image
   - exactly one image frame
@@ -98,7 +97,6 @@ Use these formats:
 
 - TURN 1:
   - must output one or more `QUERY`
-  - must not output `CREATE`, `UPDATE`, or `DELETE`
   - must leave `<plan_list>` empty
 - TURN 2:
   - uses TURN 1 query results
