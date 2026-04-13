@@ -121,6 +121,13 @@ These files are intended as starting points for your own robot policy code. You 
 
 Please keep the task server API calls, inputs, and outputs consistent, while replacing the robot-specific components with your own implementation.
 
+For a detailed, step-by-step client walkthrough (inputs, outputs, and integration points),
+see the dedicated client guide in:
+
+```bash
+widow/README.md
+```
+
 ---
 
 ## 📡 Task Server API
@@ -214,6 +221,6 @@ Please configure the corresponding `FLAT_MEMORY_*` variables in `env.sh`.
 ## 📘 Notes
 
 - The provided robot clients are reference implementations and may require adaptation for real-world deployment.
-- For prompt design, output formatting, and configurable ablations, please refer to the corresponding documentation and example environment file.
+- For prompt design, output formatting, and configurable ablations, refer to `prompt/README.md` and `env.example.sh`.
 
 ---
