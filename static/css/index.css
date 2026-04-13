@@ -28,8 +28,6 @@ body {
 }
 
 
-.publication-title {
-}
 
 .publication-banner {
   max-height: parent;
@@ -154,4 +152,20 @@ body {
 }
 #interpolation-image-wrapper img {
   border-radius: 5px;
+}
+
+.demo-item {
+  padding-bottom: 2rem;
+  margin-bottom: 2rem;
+  border-bottom: 1px solid #e6e6e6;
+}
+
+.demo-item.is-last {
+  padding-bottom: 0;
+  margin-bottom: 0;
+  border-bottom: none;
+}
+
+.demo-item p {
+  margin-top: 0.75rem;
 }

@@ -14,14 +14,11 @@
   <link rel="stylesheet" href="./static/css/bulma.min.css">
   <link rel="stylesheet" href="./static/css/bulma-carousel.min.css">
   <link rel="stylesheet" href="./static/css/bulma-slider.min.css">
-  <link rel="stylesheet" href="./static/css/fontawesome.all.min.css">
   <link rel="stylesheet"
         href="https://cdn.jsdelivr.net/gh/jpswalsh/academicons@1/css/academicons.min.css">
   <link rel="stylesheet" href="./static/css/index.css">
-  <link rel="icon" href="./static/images/favicon.svg">
 
   <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
-  <script defer src="./static/js/fontawesome.all.min.js"></script>
   <script src="./static/js/bulma-carousel.min.js"></script>
   <script src="./static/js/bulma-slider.min.js"></script>
   <script src="./static/js/index.js"></script>
@@ -33,7 +30,7 @@
     <div class="container is-max-desktop">
       <div class="columns is-centered">
         <div class="column has-text-centered">
-          <h1 class="title is-1 publication-title">HiMe: Hierarchical Embodied Memory for Long-Horizon Vision-Language-Action Control</h1>
+          <h1 class="title publication-title">HiMe: Hierarchical Embodied Memory for Long-Horizon Vision-Language-Action Control</h1>
           <div class="is-size-5 publication-authors">
             <span class="author-block">Anonymous Authors</span>
           </div>
@@ -44,29 +41,14 @@
           <div class="column has-text-centered">
             <div class="publication-links">
               <span class="link-block">
-                <a href="https://arxiv.org/pdf/XXXX.XXXXX.pdf"
-                   class="external-link button is-normal is-rounded is-dark">
-                  <span class="icon">
-                      <i class="fas fa-file-pdf"></i>
-                  </span>
-                  <span>Paper</span>
-                </a>
-              </span>
-              <span class="link-block">
                 <a href="https://arxiv.org/abs/XXXX.XXXXX"
                    class="external-link button is-normal is-rounded is-dark">
-                  <span class="icon">
-                      <i class="ai ai-arxiv"></i>
-                  </span>
                   <span>arXiv</span>
                 </a>
               </span>
               <span class="link-block">
                 <a href="https://github.com/HappyWaterXP/HiMe"
                    class="external-link button is-normal is-rounded is-dark">
-                  <span class="icon">
-                      <i class="fab fa-github"></i>
-                  </span>
                   <span>Code</span>
                   </a>
               </span>
@@ -147,28 +129,51 @@
       <div class="column is-full-width">
         <h2 class="title is-3">Demos</h2>
         <div class="columns is-multiline">
-          <div class="column is-one-third">
-            <div class="content">
+          <div class="column is-full">
+            <div class="content demo-item">
               <h3 class="title is-5">Object Search</h3>
               <video controls muted playsinline width="100%">
                 <source src="./static/videos/object_search.mp4" type="video/mp4">
               </video>
+              <p>
+                In this scenario, the robot must first inspect opaque boxes to deduce
+                storage rules and organize scattered items accordingly. Crucially, during this process, the user
+                introduces new toys into the boxes to test the robot’s ability to dynamically update its memory.
+                Finally, the robot faces a retrieval challenge, where it must synthesize memorized user preferences
+                with the box contents identified during inspection to retrieve the correct object.
+              </p>
             </div>
           </div>
-          <div class="column is-one-third">
-            <div class="content">
+          <div class="column is-full">
+            <div class="content demo-item">
               <h3 class="title is-5">Counting</h3>
               <video controls muted playsinline width="100%">
                 <source src="./static/videos/counting.mp4" type="video/mp4">
               </video>
+              <p>
+                In this scenario, the robot is required to interpret a visual recipe on the table and plan its
+                subsequent actions. The task proceeds in stages: the robot must first inspect the recipe to extract
+                the ingredient composition and prepare the materials based on the number of servings requested by
+                the user. Following this, the user introduces a specific preference. To fulfill this customized
+                demand, the robot must synthesize the new constraint with the previously memorized recipe to
+                dispense the correct personalized ingredients.
+              </p>
             </div>
           </div>
-          <div class="column is-one-third">
-            <div class="content">
+          <div class="column is-full">
+            <div class="content demo-item is-last">
               <h3 class="title is-5">Rearrangement</h3>
               <video controls muted playsinline width="100%">
                 <source src="./static/videos/rearrangement.mp4" type="video/mp4">
               </video>
+              <p>
+                In this playroom scenario, the robot performs a two-stage “clear and restore” operation. Initially,
+                the robot collects all toys scattered on the table into a storage box for cleaning. After a temporal
+                interval, the robot is tasked with restoring the items to the environment. Crucially, the user’s
+                specific placement preference is provided beforehand as prior knowledge. Therefore, to execute the
+                restoration, the robot must recall this pre-established preference and synthesize it with its visual
+                memory of the original spatial configuration to plan the final placement of each item.
+              </p>
             </div>
           </div>
         </div>
@@ -192,12 +197,6 @@
 <footer class="footer">
   <div class="container">
     <div class="content has-text-centered">
-      <a class="icon-link" href="https://arxiv.org/pdf/XXXX.XXXXX.pdf">
-        <i class="fas fa-file-pdf"></i>
-      </a>
-      <a class="icon-link" href="https://github.com/HappyWaterXP/HiMe">
-        <i class="fab fa-github"></i>
-      </a>
     </div>
     <div class="columns is-centered">
       <div class="column is-8">
