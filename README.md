@@ -17,19 +17,17 @@
 </div>
 </div>
 
-<strong>HiMe</strong> is a hierarchical embodied memory framework for long-horizon vision-language-action control. It is designed for robotic tasks where successful execution depends not only on the current observation, but also on task progress, historical context, and evolving user instructions.
-
-HiMe organizes embodied intelligence into three components with different temporal roles: a high-frequency <strong>Executor</strong> for action execution, a <strong>Sentry</strong> for monitoring recent observations and task progress, and a <strong>Planner</strong> for long-term reasoning and memory updates. This hierarchy allows the system to combine responsive low-level control with long-horizon decision making in partially observed environments.
+<strong>HiMe</strong> is a hierarchical embodied memory framework for long-horizon vision-language-action control. It is designed for robotic tasks that depend on current observations, task progress, historical context, and evolving user instructions.
 
 ---
 
 ## Overview
 
-Long-horizon manipulation often requires a robot to remember past observations, track subtask progress, and revise its internal state as the environment changes. Standard reactive policies are effective for fast control, but they struggle when important information is no longer visible in the current frame.
+Long-horizon manipulation requires robots to remember past observations, track progress across subtasks, and update internal beliefs as the environment changes. Reactive policies are effective for immediate control, but often fail when task-relevant information is no longer visible.
 
-HiMe addresses this challenge with a hierarchical design that separates fast execution from slow reasoning. The <strong>Executor</strong> handles high-frequency action generation, the <strong>Sentry</strong> monitors recent observations and determines when replanning is needed, and the <strong>Planner</strong> maintains long-term strategy and task-relevant memory.
+HiMe addresses this challenge by separating fast execution from slow reasoning. The <strong>Executor</strong> performs real-time control, the <strong>Sentry</strong> monitors recent observations and determines when replanning is needed, and the <strong>Planner</strong> maintains high-level strategy and task-relevant memory.
 
-In addition, HiMe maintains a cross-modal memory with explicit <strong>Add</strong>, <strong>Update</strong>, and <strong>Delete</strong> operations. Rather than passively storing observations, the system can preserve useful context, revise outdated beliefs, and adapt to new user instructions over time.
+To support long-horizon adaptation, HiMe maintains a cross-modal memory with explicit <strong>Add</strong>, <strong>Update</strong>, and <strong>Delete</strong> operations. This allows the system to preserve useful context, revise outdated beliefs, and incorporate new user preferences over time.
 
 <p align="center">
   <img src="./imgs/hime.jpg" width="900"/>
@@ -39,7 +37,7 @@ In addition, HiMe maintains a cross-modal memory with explicit <strong>Add</stro
 
 ## Main Results
 
-HiMe achieves strong performance on long-horizon manipulation tasks, consistently outperforming transient-memory and flat-memory baselines across object search, counting, and rearrangement settings.
+HiMe achieves strong performance on three long-horizon manipulation tasks, object search, counting, and rearrangement, and consistently outperforms transient or flat memory baselines.
 
 <p align="center">
   <img src="./imgs/main.jpg" width="700"/>
