@@ -6,7 +6,7 @@
 </div>
 </div>
 
-<div>
+<!-- <div>
 <br>
 
 <div align="center">
@@ -15,7 +15,7 @@
 [**🌐Project Page**](<PROJECT_PAGE_URL>) |
 
 </div>
-</div>
+</div> -->
 
 <strong>HiMe</strong> is a hierarchical embodied memory framework for long-horizon vision-language-action control. It is designed for robotic tasks that depend on current observations, task progress, historical context, and evolving user instructions.
 
