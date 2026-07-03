@@ -1,0 +1,262 @@
+%%%%%%%% ICML 2026 EXAMPLE LATEX SUBMISSION FILE %%%%%%%%%%%%%%%%%
+
+\documentclass{article}
+\usepackage[accepted]{icml2026}
+
+% Recommended, but optional, packages for figures and better typesetting:
+\usepackage{microtype}
+\usepackage{graphicx}
+\usepackage{subcaption}
+\usepackage{booktabs} % for professional tables
+
+% hyperref makes hyperlinks in the resulting PDF.
+% If your build breaks (sometimes temporarily if a hyperlink spans a page)
+% please comment out the following usepackage line and replace
+% \usepackage{icml2026} with \usepackage[nohyperref]{icml2026} above.
+\usepackage{hyperref}
+
+
+% Attempt to make hyperref and algorithmic work together better:
+\newcommand{\theHalgorithm}{\arabic{algorithm}}
+
+% Use the following line for the initial blind version submitted for review:
+\usepackage{icml2026}
+
+% For preprint, use
+% \usepackage[preprint]{icml2026}
+
+% If accepted, instead use the following line for the camera-ready submission:
+% \usepackage[accepted]{icml2026}
+
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{mathtools}
+\usepackage{amsthm}
+
+\usepackage{colortbl}
+\usepackage{graphicx} 
+\usepackage[most]{tcolorbox}
+\usepackage[table,xcdraw]{xcolor}
+% if you use cleveref..
+\usepackage[capitalize,noabbrev]{cleveref}
+
+\usepackage{enumitem}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% THEOREMS
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\theoremstyle{plain}
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{corollary}[theorem]{Corollary}
+\theoremstyle{definition}
+\newtheorem{definition}[theorem]{Definition}
+\newtheorem{assumption}[theorem]{Assumption}
+\theoremstyle{remark}
+\newtheorem{remark}[theorem]{Remark}
+
+% Todonotes is useful during development; simply uncomment the next line
+%    and comment out the line below the next line to turn off comments
+%\usepackage[disable,textsize=tiny]{todonotes}
+\usepackage[textsize=tiny]{todonotes}
+
+\newcommand{\siyin}[1]{\textcolor{orange}{[siyin: #1 ]}}
+
+\newcommand{\jjg}[1]{\textcolor{blue}{[jjg: #1 ]}}
+
+\renewcommand{\figureautorefname}{Fig.} 
+\renewcommand{\tableautorefname}{Tab.}   
+\renewcommand{\sectionautorefname}{Sec.} 
+\renewcommand{\subsectionautorefname}{Sec.} 
+\renewcommand{\equationautorefname}{Eq.} 
+\renewcommand{\appendixautorefname}{App.} 
+
+
+% The \icmltitle you define below is probably too long as a header.
+% Therefore, a short form for the running title is supplied here:
+\icmltitlerunning{Submission and Formatting Instructions for ICML 2026}
+
+\begin{document}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{}
+\fancyhead[C]{}
+\fancyhead[R]{}
+\renewcommand{\headrulewidth}{0.4pt}
+
+% \twocolumn[
+%   \icmltitle{HiMe: Hierarchical Embodied Memory for Long-Horizon Vision-Language-Action Control}
+
+%  % \icmltitle{HiMe: Hierarchical Embodied Memory for Long-Horizon Robotic Control}
+%  %    \icmltitle{HiMe: Scaling Long-Horizon Manipulation via Hierarchical Embodied Memory」
+
+%   % It is OKAY to include author information, even for blind submissions: the
+%   % style file will automatically remove it for you unless you've provided
+%   % the [accepted] option to the icml2026 package.
+
+%   % List of affiliations: The first argument should be a (short) identifier you
+%   % will use later to specify author affiliations Academic affiliations
+%   % should list Department, University, City, Region, Country Industry
+%   % affiliations should list Company, City, Region, Country
+
+%   % You can specify symbols, otherwise they are numbered in order. Ideally, you
+%   % should not use this facility. Affiliations will be numbered in order of
+%   % appearance and this is the preferred way.
+%   \icmlsetsymbol{equal}{*}
+
+%   \begin{icmlauthorlist}
+%     \icmlauthor{Firstname1 Lastname1}{equal,yyy}
+%     \icmlauthor{Firstname2 Lastname2}{equal,yyy,comp}
+%     \icmlauthor{Firstname3 Lastname3}{comp}
+%     \icmlauthor{Firstname4 Lastname4}{sch}
+%     \icmlauthor{Firstname5 Lastname5}{yyy}
+%     \icmlauthor{Firstname6 Lastname6}{sch,yyy,comp}
+%     \icmlauthor{Firstname7 Lastname7}{comp}
+%     %\icmlauthor{}{sch}
+%     \icmlauthor{Firstname8 Lastname8}{sch}
+%     \icmlauthor{Firstname8 Lastname8}{yyy,comp}
+%     %\icmlauthor{}{sch}
+%     %\icmlauthor{}{sch}
+%   \end{icmlauthorlist}
+
+%   \icmlaffiliation{yyy}{Department of XXX, University of YYY, Location, Country}
+%   \icmlaffiliation{comp}{Company Name, Location, Country}
+%   \icmlaffiliation{sch}{School of ZZZ, Institute of WWW, Location, Country}
+
+%   \icmlcorrespondingauthor{Firstname1 Lastname1}{first1.last1@xxx.edu}
+%   \icmlcorrespondingauthor{Firstname2 Lastname2}{first2.last2@www.uk}
+
+%   % You may provide any keywords that you find helpful for describing your
+%   % paper; these are used to populate the "keywords" metadata in the PDF but
+%   % will not be shown in the document
+%   \icmlkeywords{Machine Learning, ICML}
+
+%   \vskip 0.3in
+% ]
+\twocolumn[
+  \icmltitle{HiMe: Hierarchical Embodied Memory for Long-Horizon Vision-Language-Action Control}
+
+  \begin{center}
+  {\Large
+  Li Ji$^{1*}$ \quad
+  Siyin Wang$^{1,2*}$ \quad
+  Pengfang Qian$^{1,2}$ \quad
+  Xiaopeng Yu$^{1}$ \\
+  Yihai Tian$^{1,3}$ \quad
+  Zhaoye Fei$^{1}$ \quad
+  Jingjing Gong$^{2}$ \quad
+  Xipeng Qiu$^{1,2}$
+  \par}
+
+  \vspace{0.5em}
+
+  {\normalsize
+  $^{1}$School of Computer Science, Fudan University, Shanghai, China \\
+  $^{2}$Shanghai Innovation Institute, Shanghai, China \\
+  $^{3}$Software Engineering, East China Normal University, Shanghai, China
+  \par}
+
+  \vspace{0.4em}
+
+  {\normalsize
+  $^{*}$Equal contribution
+  \par}
+
+  \vspace{0.4em}
+
+  % {\normalsize
+  % Correspondence to: Xipeng Qiu
+  % \par}
+  \end{center}
+
+% You may provide any keywords that you find helpful for describing your
+% paper; these are used to populate the "keywords" metadata in the PDF but
+% will not be shown in the document
+  \icmlkeywords{Machine Learning, ICML}
+
+  \vskip 0.3in
+]
+% this must go after the closing bracket ] following \twocolumn[ ...
+
+% This command actually creates the footnote in the first column listing the
+% affiliations and the copyright notice. The command takes one argument, which
+% is text to display at the start of the footnote. The \icmlEqualContribution
+% command is standard text for equal contribution. Remove it (just {}) if you
+% do not need this facility.
+
+% Use ONE of the following lines. DO NOT remove the command.
+% If you have no special notice, KEEP empty braces:
+% \printAffiliationsAndNotice{}  % no special notice (required even if empty)
+% Or, if applicable, use the standard equal contribution text:
+% \printAffiliationsAndNotice{\icmlEqualContribution}
+
+\begin{abstract}
+    Current Vision-Language-Action (VLA) models excel at robotic manipulation but often struggle with non-Markovian tasks requiring long-term memory and reasoning due to their reliance on immediate observations. Existing solutions  face a ``frequency-competence paradox,'' where high-performance models are too slow for real-time control, while faster models lack sufficient reasoning capabilities. To resolve this architectural misalignment, we propose \textbf{HiMe}, a Hierarchical Embodied Memory framework that decouples embodied intelligence into a high-frequency Executor for execution, a Sentry for working memory, and a Planner for long-term strategy. We also introduce a dynamic knowledge system based on cross-modal semantic schemas and active management mechanisms, allowing robots to maintain memory plasticity through ``Add, Update, and Delete'' operations. This hierarchical design effectively balances the conflict between real-time execution and slow thinking planning, significantly improving success rates in long-horizon tasks. Experiments demonstrate that this approach not only outperforms flat memory baselines but also exhibits the novel ability to self-correct its internal knowledge based on human preferences. Project page: \url{}
+
+\end{abstract}
+
+\section{Introduction}
+
+\input{010-intro}
+
+\section{Related Work}
+
+\input{020-relate-v2}
+\section{Methods}
+
+\input{030-method-v2}
+\section{Experiments}
+
+\input{040-exp}
+
+\section{Conclusion}
+
+
+In this work, we presented HiMe, a novel hierarchical embodied memory framework that resolves the fundamental frequency-competence paradox in long-horizon Vision-Language-Action control. By decoupling embodied intelligence into a high-frequency Executor, a progress-aware Sentry, and a strategic Planner, we mirror the multi-store structure of human cognition to balance real-time responsiveness with deep reasoning. Our introduction of cross-modal semantic schemata and active management mechanisms (Add, Update, Delete) transforms robotic memory from a passive observation buffer into a dynamic, self-evolving knowledge system. Extensive experiments demonstrate that HiMe achieves a state-of-the-art 90\% average success rate—effectively bridging the gap to human-level performance. 
+We believe that this shift from flat, transient policies to hierarchical, structured memory is a vital step toward developing truly autonomous and adaptive robotic agents.
+% for complex, open-world environments.
+% —but also exhibits the crucial ability to self-correct internal beliefs in alignment with shifting human preferences. We believe that this shift from flat, transient policies to hierarchical, structured memory is a vital step toward developing truly autonomous and adaptive robotic agents for complex, open-world environments.
+
+
+\section*{Impact Statement}
+
+This paper presents work where the goal is to advance the fields of machine learning and robotics. There are many potential societal consequences of our work, none of which we feel must be specifically highlighted here.
+
+\section*{Limitations}
+
+The paper has several limitations that suggest directions for future work. Our evaluation is primarily conducted on real-robot tasks without a matched standard simulation benchmark. While this setting better captures memory-intensive long-horizon behavior under real-world dynamics, it limits controlled comparison and benchmark-level reproducibility. In addition, the current tasks mainly rely on relatively simple manipulation primitives such as pick-and-place, and broader validation on more diverse and dexterous skills remains necessary. Although we provide additional analysis on memory scaling and open-source Planner substitution, the current study does not yet fully characterize performance under very long horizons, larger environments, or extended deployment over time.
+% In the unusual situation where you want a paper to appear in the
+% references without citing it in the main text, use \nocite
+\nocite{langley00}
+
+\bibliography{example_paper}
+\bibliographystyle{icml2026}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% APPENDIX
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\newpage
+\appendix
+\onecolumn
+\input{appendix_v2}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\end{document}
+
+% This document was modified from the file originally made available by
+% Pat Langley and Andrea Danyluk for ICML-2K. This version was created
+% by Iain Murray in 2018, and modified by Alexandre Bouchard in
+% 2019 and 2021 and by Csaba Szepesvari, Gang Niu and Sivan Sabato in 2022.
+% Modified again in 2023 and 2024 by Sivan Sabato and Jonathan Scarlett.
+% Previous contributors include Dan Roy, Lise Getoor and Tobias
+% Scheffer, which was slightly modified from the 2010 version by
+% Thorsten Joachims & Johannes Fuernkranz, slightly modified from the
+% 2009 version by Kiri Wagstaff and Sam Roweis's 2008 version, which is
+% slightly modified from Prasad Tadepalli's 2007 version which is a
+% lightly changed version of the previous year's version by Andrew
+% Moore, which was in turn edited from those of Kristian Kersting and
+% Codrina Lauth. Alex Smola contributed to the algorithmic style files.

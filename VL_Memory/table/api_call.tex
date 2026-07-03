@@ -1,0 +1,38 @@
+
+\begin{table*}[t]
+\centering
+% 使用 resizebox 确保表格适应页面宽度
+\caption{Comparison of different methods. We report API calls, memory hit, and average scores across three tasks. Here, API Calls refers to the average Planner requests per subtask, and Memory Hit measures the presence of required information in memory during memory-dependent subtask.}\label{tab:comparison}
+\resizebox{\textwidth}{!}{
+\begin{tabular}{l ccc ccc ccc ccc}
+\toprule
+% 第一行表头：大标题
+\textbf{Method} & \multicolumn{3}{c}{\textbf{Components}} & \multicolumn{3}{c}{\textbf{Search \& Retrieval}} & \multicolumn{3}{c}{\textbf{Counting}} & \multicolumn{3}{c}{\textbf{Clear \& Restore}} \\
+\cmidrule(lr){2-4} \cmidrule(lr){5-7} \cmidrule(lr){8-10} \cmidrule(lr){11-13}
+
+% 第二行表头：具体的列名
+% Components 部分
+ & \textbf{Sentry} 
+ & \textbf{\begin{tabular}[b]{@{}c@{}}Memory\\Management\end{tabular}} 
+ & \textbf{\begin{tabular}[b]{@{}c@{}}Memory\\Size\end{tabular}}
+% Search & Retrieval 部分
+ & \textbf{\begin{tabular}[b]{@{}c@{}}API\\Call ($\downarrow$)\end{tabular}} 
+ & \textbf{\begin{tabular}[b]{@{}c@{}}Memory\\Hit ($\uparrow$)\end{tabular}} 
+ & \textbf{\begin{tabular}[b]{@{}c@{}}Avg.\\Score ($\uparrow$)\end{tabular}} 
+% Counting 部分
+ & \textbf{\begin{tabular}[b]{@{}c@{}}API\\Call ($\downarrow$)\end{tabular}} 
+ & \textbf{\begin{tabular}[b]{@{}c@{}}Memory\\Hit ($\uparrow$)\end{tabular}} 
+ & \textbf{\begin{tabular}[b]{@{}c@{}}Avg.\\Score ($\uparrow$)\end{tabular}} 
+% Clear & Restore 部分
+ & \textbf{\begin{tabular}[b]{@{}c@{}}API\\Call ($\downarrow$)\end{tabular}} 
+ & \textbf{\begin{tabular}[b]{@{}c@{}}Memory\\Hit ($\uparrow$)\end{tabular}} 
+ & \textbf{\begin{tabular}[b]{@{}c@{}}Avg.\\Score ($\uparrow$)\end{tabular}} \\
+\midrule
+
+HiMe (Ours) & $\checkmark$ & $\checkmark$ & $infinite$ & \textbf{1.8} & \textbf{94\%} & \textbf{92\%} & \textbf{2.6} & \textbf{98\%} & \textbf{92\%} & \textbf{1.4} & \textbf{92\%} & \textbf{87\%} \\
+Keyframe Memory & $\times$ & $\times$ & $recent \ 8$ & 5.4 & 68\% & 64\% & 4.8 & 61\% & 58\% & 6.2 & 76\% & 73\% \\
+% HiMe w/o Sentry & $\checkmark$ & $\checkmark$ & $\times$ & 20 & 75\% & 0.82 & 15 & 70\% & 0.78 & 28 & 65\% & 0.72 \\
+\bottomrule
+\end{tabular}
+}
+\end{table*}

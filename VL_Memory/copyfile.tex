@@ -1,0 +1,111 @@
+
+\title{HiMe: Hierarchical Embodied Memory for Long-Horizon Vision-Language-Action Control}
+
+\section{Introduction}
+Vision-Language-Action (VLA) models have emerged as a powerful paradigm for general-purpose robotic manipulation with large-scale internet-level pretraining. By directly mapping observations to control signals, they provide a powerful foundation for executing complex motor skills. 
+Most existing architectures rely on the Markov assumption, where the policy $p(a_t | o_t, l)$ is conditioned only on the transient observation at the current time step. This inherent limitation prevents them from maintaining a persistent belief of the environment in non-Markovian settings. 
+Consequently, VLAs struggle with complex, long-horizon tasks that demand long-range temporal dependencies, where the optimal action depends on a chain of past events or latent information that is no longer visible in the current sensory stream.
+
+
+To overcome these limitations, one intuitive approach is to imbue VLA models with native memory capabilities through specialized training or auxiliary losses \cite{torne2025, fang2025}. However, these training-based methods are often constrained by limited context windows and the inherent difficulty of optimizing long-range causal dependencies over hundreds of steps. Another alternative is to introduce Large Vision-Language Models (VLMs) as high-level memory containers to store and retrieve historical trajectories \cite{memer2025}. Yet, real-time robotic control imposes a strict upper bound on the deployable VLM scale, as control demands high-frequency, low-latency execution. This scale constraint, in turn, limits the internal world knowledge and generalization capabilities of the VLM, weakening its zero-shot performance. Importantly, most memory operations do not intrinsically require high-level reasoning or broad generalization. 
+
+Motivated by this temporal and scale mismatch, we decouple memory and reasoning operations into hierarchical layers with distinct time scales.
+We propose a \textbf{Hierarchical Embodied Memory} framework that decouples embodied intelligence into three functional layers with distinct temporal resolutions, mirroring the multi-store structure of human cognition. 
+(1) The \textbf{Executor (VLA)} governs \textbf{transient memory}, focusing on high-frequency sensory-motor coordination for physical stability. 
+(2) The \textbf{Sentry} acts as the guardian of \textbf{working memory} (short-term memory); it asynchronously filters the continuous sensory stream to identify critical state transitions, effectively bridging the gap between raw perception and semantic events. 
+(3) The \textbf{Planner} manages \textbf{episodic memory} (long-term memory). 
+By invoking the "slow-thinking" Planner only at the discrete junctions identified by the Sentry, our architecture preserves deep strategic reasoning while maintaining real-time execution, effectively resolving the frequency-capability paradox.
+
+
+However, a static memory hierarchy alone is insufficient for the complexities of real-world human-robot interaction, which is characterized by: (1) \textit{multimodal richness}, where human instructions carry dense logical constraints and latent preferences---such as designating a specific red cup as ``Alice's cup''---that are nearly impossible to capture through vision-only trajectories; and (2) \textit{high dynamism}, where task goals and environment states are not static but evolve. A memory system that only supports passive accumulation \cite{memer2025} inevitably suffers from knowledge stagnation and cognitive dissonance when faced with such outdated or conflicting experiences.
+
+Furthermore, our Hierarchical Memory framework treats memory as a multimodal, dynamic knowledge system centered around two fundamental dimensions:
+
+\textit{(1) What to memorize?: Cross-modal Semantic Schemata.} To bridge the gap between raw perception and logical intent, we represent episodic memory as an object-centric system where visual experiences are deeply anchored with high-density textual descriptions. This organization allows the Planner to retrieve not only visual features but also the underlying ownerships, procedural rules, and human preferences that are invisible in pure pixel space.
+
+\textit{(2) How to memorize?: Active Management Mechanism.} In contrast to passive storage, we introduce explicit \textit{Add}, \textit{Update}, and \textit{Delete} operations to grant the robot knowledge plasticity. When the Sentry detects a significant state transition or a revision in user intent, the Planner proactively refines the knowledge base. By updating outdated beliefs and purging redundant or erroneous data, the agent maintains a consistent and concise memory that evolves in alignment with the environment.
+
+We evaluate our method across a suite of challenging long-horizon manipulation tasks that require multi-step reasoning and adaptation to shifting human preferences. Experimental results show that our approach significantly outperforms existing flat-memory baselines in both success rate and computational efficiency. Notably, our agent demonstrates the ability to "self-correct" its internal knowledge base when faced with conflicting instructions, a capability that is absent in prior retrieval-based methods.
+
+Our core contributions are summarized as follows:
+\begin{itemize}
+    \item We propose a \textbf{Hierarchical Memory Management framework} that decouples robotic control into transient (Executor), working (Sentry), and episodic (Planner) memory layers, resolving the granularity conflict in long-horizon VLA tasks.
+    \item  We introduce a Cross-modal Memory organization (\textit{what to memorize}) combined with an Active Management mechanism ((\textit{how to memorize})), enabling the robot to maintain knowledge plasticity and alignment in highly dynamic and multimodal interactions.
+    \item We provide \textbf{extensive empirical evidence} demonstrating that our hierarchical, self-evolving memory architecture achieves superior performance and robustness in complex human-robot collaborative scenarios with significantly reduced VLM computational overhead.
+\end{itemize}
+
+
+\section{Methods}
+% === Method Overview
+\subsection{Overview}
+Long-horizon manipulation relies on two contradictory capabilities: maintaining global consistency over extended history and reacting responsively to immediate dynamics. End-to-end approaches typically struggle to balance these needs—short-context policies suffer from catastrophic forgetting, while heavy reasoning models incur prohibitive latency for real-time control.
+
+To address this challenge, we propose HiMe, a Hierarchical Embodied Memory framework that decouples embodied intelligence into three functional layers: 
+(1) The Executor $\pi_e$: A high-frequency VLA that ensures physical stability by mapping immediate observations to actions. 
+(2) The Sentry $\pi_s$: A lightweight VLM that identifies progress changes in the environment, triggering planning only when necessary.
+(3) The Planner $\pi_p$: A heavyweight VLM that uses long-term episodic memory and plans at a lower frequency.
+This separation allows the system to amortize the cost of complex planning over extended execution windows, ensuring the low-level controller remains responsive to immediate physical dynamics while maintaining long-term task coherence. 
+
+% === Problem Formulation
+\textbf{Problem Setup.} 
+We formulate the long-horizon manipulation task as a sequential decision-making process under partial observability. The agent operates over a horizon $T \gg 1$, receiving high-dimensional observations $o_t \in \mathcal{O}$ and a natural language instruction $l$. The objective is to generate an action sequence $a_{0:T}$ that transitions the environment to a state satisfying the instruction $l$. Ideally, the optimal action at any step $t$ depends on the full interaction history $h_t = (o_0, a_0, \dots, o_t)$ to resolve ambiguity and track progress. However, processing $h_t$ continuously is computationally intractable. To address this, we adopt a hierarchical policy $\pi(a_t \mid o_{0:t}, l)$.
+
+\subsection{Hierarchical Embodied Memory}
+To bridge the gap between reflexes and reflection, we augment the agent with a structured state space comprising three distinct components. This explicitly represents the information required for immediate control, temporal monitoring, and long-term planning.
+
+\textbf{Transient Memory ($\mathcal{T}_t$).} Managed by the Executor, it contains the instantaneous observation $o_t$. It serves as the minimal sufficient state for reactive sensory-motor coordination.
+
+\textbf{Working Memory ($\mathcal{W}_t$).} 
+To support high-frequency monitoring, we maintain a sliding window of recent observations $\mathcal{W}_t = \{o_{t-h_s}, \dots, o_t\}$. Unlike the main memory, this buffer is transient and raw, capturing the immediate dynamics required for verifying subgoal status or detecting sudden failures.
+
+\textbf{Episodic Memory ($\mathcal{E}_t$).} A persistent long-term store managed by the Planner, consisting of: 
+(1) \textit{Contextual Memory $\mathcal{E}_t^{c}$} 
+, a multimodal key--value store $\mathcal{M}_t$ that accumulates compact, task-relevant information—including both visual imagery and textual descriptions—over time, such as object state changes, spatial constraints, or human preferences, and supports retrieval via textual keys.
+(2) \textit{Procedural Memory $\mathcal{E}_t^{p}$} 
+, a structured plan $\mathcal{E}_t^{p} = \{\tau_i\}_{i=1}^{N}$ consisting of an ordered list of language subgoals, where the active subgoal $\tau_t^{(i)}$ carries status labels like `active', `pending' or `completed' to synchronize the control loop.
+
+
+\subsection{Hierarchical Policy Decomposition}
+We decompose the hierarchical policy $\pi(a_t \mid o_{0:t}, l)$ into a three-tiered hierarchy. 
+This design ranges from a memory-free execution layer to a long-horizon reasoning layer, progressively trading off frequency for context capacity, decoupling immediate actuation from high-level reasoning. Formally, the decision process at time $t$ involves interactions between a base executor $\pi_e$, a monitoring sentry $\pi_s$, and a reasoning planner $\pi_p$.
+
+
+\textbf{Base-level Executor ($\pi_e$).}
+At the base level, the executor functions as a high-frequency reactive policy. We assume a local Markov property where, given an active language subgoal $\tau_t \in \mathcal{E}_t^p$, the optimal action is conditionally independent of the long-term history. The executor maps the current observation and subgoal to an action:
+\begin{equation}
+    a_t \sim \pi_e(a_t \mid o_t, \tau_t),
+\end{equation}
+where $\tau_t$ serves as a conditioning variable abstracted from the complex episodic history, representing the current executing subgoal. This design ensures that $\pi_e$ remains stateless and computationally efficient, enabling real-time responsiveness to physical dynamics.
+
+
+\textbf{Agile Sentry ($\pi_s$).}
+The second layer is the sentry, it is a gating function $u_t \in \{0, 1\}$ that be used to amortize the computational cost of reasoning. Operating on the sliding window working memory $\mathcal{W}_t$, the sentry evaluates subgoal completion or environmental deviation at intervals of $n_m$:
+\begin{equation}
+    u_t = 
+    \begin{cases} 
+    \mathbb{I}[\pi_s(\mathcal{W}_t, \tau_t) > \delta] & \text{if } t \equiv 0 \pmod{n_m} \\
+    0 & \text{otherwise,}
+    \end{cases}
+\end{equation}
+where $\mathbb{I}[\cdot]$ is the indicator function and $\delta$ is a decision threshold. $u_t=1$ signals a "handover" event—indicating that the current subgoal $\tau_t$ is either completed or invalidated, thereby triggering the planner. When $u_t=0$, the system bypasses high-level reasoning, maintaining the current latent state $\mathcal{E}_{t+1} \leftarrow \mathcal{E}_t$.
+
+
+\textbf{Reasoning Planner ($\pi_p$).}
+When triggered ($u_t=1$), the planner performs a belief update on the episodic memory $\mathcal{E}_t$ to re-align the agent's internal state with the environment. This process is formulated as a two-stage transition:
+
+(1) \textit{Context Retrieval:} The planner first generates a query $q$ to retrieve a subset of task-relevant knowledge $\mathcal{M}_{ret} \subset \mathcal{E}_t^c$ via semantic similarity:
+\begin{equation}
+    q = f_{\text{enc}}(l, \mathcal{W}_t); \quad \mathcal{M}_{ret} = \text{TopK}(\mathcal{E}_t^c, q).
+\end{equation}
+
+(2) \textit{Memory Update \& Re-planning:} Conditioned on the global instruction $l$, working memory $\mathcal{W}_t$, and retrieved context $\mathcal{M}_{ret}$, the planner updates the episodic memory state:
+\begin{equation}
+    (\mathcal{E}_{t+1}^c, \mathcal{E}_{t+1}^p) \leftarrow \pi_p(l, \mathcal{W}_t, \mathcal{M}_{ret}, \mathcal{E}_t^p).
+\end{equation}
+Specifically, this update involves symbolic operations on the Contextual Memory $\mathcal{E}^c$ to reflect new world states, and the synthesis of a new procedural plan $\mathcal{E}_{t+1}^p$. 
+This involves three atomic operations: (a) \texttt{Add:} registering new environmental facts or user preferences; (b) \texttt{Update:} rectifying outdated entries; and (c) \texttt{Delete:} removing stale or conflicting data to maintain a concise representation. 
+The next subgoal $\tau_{t+1}$ is then sampled from the updated plan, closing the hierarchical loop.
+
+
+\subsection{Implementation Details.} 
+While our framework is model-agnostic, we instantiate the planner with GPT-4o for its strong multimodal reasoning capabilities, and the sentry with Qwen-VL-8B for its balance of speed and grounding accuracy. The memory backend utilizes a vector database for semantic retrieval, utilizing OpenAI's text-embedding-3 model to encode text queries and storing multimodal memory entries alongside their caption embeddings for cosine similarity retrieval. We set the buffer size $h_s = 8$ and the monitoring interval $n_m = 5$. Consistent with our design philosophy, only the lightweight $\pi_l$, a fine-tuned VLA based on $\pi_{0.5}$, requires domain-specific training. The sentry and planner operate in a zero-shot or few-shot manner, leveraging pre-trained generalization to handle long-horizon logic without extensive data collection.

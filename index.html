@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="HiMe is a Hierarchical Embodied Memory framework that decouples robotic control into transient, working, and episodic memory layers for long-horizon Vision-Language-Action tasks."
+    />
+    <meta name="theme-color" content="#f7f5f0" />
+    <title>HiMe | Hierarchical Embodied Memory</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <!-- Desktop left sidebar -->
+    <nav class="sidebar" aria-label="Page navigation">
+      <div class="sidebar-inner">
+        <a class="sidebar-brand" href="#overview" aria-label="HiMe">
+          <span class="sidebar-mark">Hi</span>
+          <span class="sidebar-name">Me</span>
+        </a>
+        <div class="sidebar-links">
+          <a class="sidebar-link" href="#overview">Overview</a>
+          <a class="sidebar-link" href="#introduction">Introduction</a>
+          <a class="sidebar-link" href="#method">Method</a>
+          <a class="sidebar-link" href="#tasks">Tasks</a>
+          <a class="sidebar-link" href="#results">Results</a>
+        </div>
+      </div>
+    </nav>
+
+    <!-- Mobile top bar -->
+    <header class="mobile-header">
+      <span class="mobile-brand">HiMe</span>
+      <div class="mobile-actions">
+        <a class="btn btn-dark btn-sm" href="./VL_Memory/example_paper.pdf" target="_blank" rel="noopener">Paper ↗</a>
+      </div>
+    </header>
+
+    <main class="content-main">
+      <!-- Paper header -->
+      <header class="paper-header reveal" id="overview">
+        <div class="paper-tags">
+          <span class="tag">Embodied AI</span>
+          <span class="tag">Long-Horizon Manipulation</span>
+          <span class="tag">Hierarchical Memory</span>
+          <span class="tag">VLA</span>
+          <span class="tag">ICML 2026</span>
+        </div>
+
+        <h1>HiMe</h1>
+
+        <p class="paper-subtitle">
+          Hierarchical Embodied Memory for Long-Horizon Vision-Language-Action Control
+        </p>
+
+        <div class="authors-block">
+          <p class="authors-line">
+            Li Ji<sup>1*</sup> &nbsp;·&nbsp;
+            Siyin Wang<sup>1,2*</sup> &nbsp;·&nbsp;
+            Pengfang Qian<sup>1,2</sup> &nbsp;·&nbsp;
+            Xiaopeng Yu<sup>1</sup> &nbsp;·&nbsp;
+            Yihai Tian<sup>1,3</sup> &nbsp;·&nbsp;
+            Zhaoye Fei<sup>1</sup> &nbsp;·&nbsp;
+            Jingjing Gong<sup>2</sup> &nbsp;·&nbsp;
+            Xipeng Qiu<sup>1,2</sup>
+          </p>
+          <p class="affil-line">
+            <sup>1</sup>Fudan University &nbsp;·&nbsp;
+            <sup>2</sup>Shanghai Innovation Institute &nbsp;·&nbsp;
+            <sup>3</sup>East China Normal University
+          </p>
+          <p class="affil-note">* Equal contribution</p>
+        </div>
+
+        <div class="paper-actions">
+          <a
+            class="btn btn-dark"
+            href="./VL_Memory/example_paper.pdf"
+            target="_blank"
+            rel="noopener"
+          >Paper ↗</a>
+          <a
+            class="btn btn-outline"
+            href="#method"
+          >Method ↓</a>
+        </div>
+
+        <div class="meta-grid">
+          <div class="meta-item">
+            <p class="meta-label">Success Rate</p>
+            <p class="meta-value">90%</p>
+          </div>
+          <div class="meta-item">
+            <p class="meta-label">Planner</p>
+            <p class="meta-value">GPT-4o</p>
+          </div>
+          <div class="meta-item">
+            <p class="meta-label">Sentry</p>
+            <p class="meta-value">Qwen3-VL-8B</p>
+          </div>
+          <div class="meta-item">
+            <p class="meta-label">Venue</p>
+            <p class="meta-value">ICML 2026</p>
+          </div>
+        </div>
+      </header>
+
+      <!-- Abstract / Introduction -->
+      <section class="paper-section reveal" id="introduction">
+        <h2>Introduction</h2>
+
+        <div class="body-text">
+          <img
+            src="./VL_Memory/imgs/intro.png"
+            alt="Overview of HiMe"
+            class="fig-img"
+          />
+          <p class="fig-caption">
+            <strong>Overview of HiMe.</strong> A motivating example illustrates the need for maintaining and updating task-relevant multimodal memory across long-horizon subtasks. HiMe addresses this by organizing embodied intelligence into a hierarchical structure that separates fast execution from memory-driven reasoning.
+          </p>
+        </div>
+
+        <p class="body-text" style="margin-top: 1.5rem;">
+          Vision-Language-Action (VLA) models have emerged as a powerful paradigm for general-purpose robotic manipulation. However, most existing architectures rely on the Markov assumption — the policy is conditioned only on the transient observation at the current time step. This prevents them from maintaining a persistent belief of the environment in non-Markovian settings, causing VLAs to struggle with complex, long-horizon tasks demanding long-range temporal dependencies.
+        </p>
+        <p class="body-text" style="margin-top: 1rem;">
+          A fundamental <strong>frequency-competence paradox</strong> exists: using large VLMs for real-time planning introduces prohibitive latency, while smaller models lack sufficient reasoning. We resolve this by decoupling memory and reasoning into hierarchical layers with distinct temporal resolutions, mirroring the multi-store structure of human cognition.
+        </p>
+
+        <div style="margin-top: 1.75rem;">
+          <h3>Contributions</h3>
+          <ul class="contrib-list">
+            <li>A <strong>Hierarchical Memory Management framework</strong> that decouples robotic control into transient (Executor), working (Sentry), and episodic (Planner) memory layers, resolving the granularity conflict in long-horizon VLA tasks.</li>
+            <li>A <strong>Cross-modal Memory</strong> organization paired with an <strong>Active Management mechanism</strong> — enabling the robot to maintain knowledge plasticity and alignment in highly dynamic multimodal interactions.</li>
+            <li><strong>Extensive empirical evidence</strong> demonstrating superior performance and robustness in complex human-robot collaborative scenarios with significantly reduced VLM computational overhead.</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- Method -->
+      <section class="paper-section reveal" id="method">
+        <h2>Method</h2>
+
+        <p class="section-note">
+          HiMe decomposes long-horizon control into three functional layers — each with a distinct temporal scale and cognitive role.
+        </p>
+
+        <div class="feature-grid">
+          <div class="feature-item">
+            <p class="feature-label">Layer 1 — Transient Memory</p>
+            <p class="feature-value">Executor (VLA)</p>
+            <p class="feature-desc">A high-frequency VLA policy that maps immediate observations to actions. Stateless and computationally efficient, it reacts to physical dynamics at real-time speed.</p>
+          </div>
+          <div class="feature-item">
+            <p class="feature-label">Layer 2 — Working Memory</p>
+            <p class="feature-value">Sentry (Qwen3-VL-8B)</p>
+            <p class="feature-desc">A lightweight VLM that monitors a sliding window of recent frames, identifying subtask completions and triggering the Planner only at critical junctions.</p>
+          </div>
+          <div class="feature-item">
+            <p class="feature-label">Layer 3 — Episodic Memory</p>
+            <p class="feature-value">Planner (GPT-4o)</p>
+            <p class="feature-desc">A heavyweight VLM that manages long-term memory via cross-modal semantic schemata, performing retrieval and re-planning at low frequency when triggered by the Sentry.</p>
+          </div>
+        </div>
+
+        <div class="body-text" style="margin-top: 1.75rem;">
+          <img
+            src="./VL_Memory/imgs/hime.png"
+            alt="Architecture of HiMe"
+            class="fig-img"
+          />
+          <p class="fig-caption">
+            <strong>Architecture of HiMe.</strong> The Sentry periodically tracks the Executor's progress and buffers observations. Upon detecting subtask completion, it triggers the Planner to consolidate memory and refine the procedural plan. The updated instruction is fed back to the Sentry, forming a closed-loop system.
+          </p>
+        </div>
+
+        <div style="margin-top: 1.75rem;">
+          <h3>Episodic Memory Design</h3>
+          <p class="body-text" style="margin-top: 0.5rem;">
+            The Planner maintains two complementary memory stores:
+          </p>
+          <div class="arch-detail-grid" style="margin-top: 0.85rem;">
+            <div class="arch-detail-card">
+              <p class="arch-label">Contextual Memory ℰ<sup>c</sup></p>
+              <p class="arch-copy">A multimodal key-value store that accumulates compact, task-relevant information — visual imagery and textual descriptions of object states, spatial constraints, and human preferences. Supports semantic retrieval via text queries.</p>
+            </div>
+            <div class="arch-detail-card">
+              <p class="arch-label">Procedural Memory ℰ<sup>p</sup></p>
+              <p class="arch-copy">An ordered list of language subgoals, each carrying status labels (<code>active</code>, <code>pending</code>, <code>done</code>) to synchronize the hierarchical control loop.</p>
+            </div>
+          </div>
+        </div>
+
+        <div style="margin-top: 1.75rem;">
+          <h3>Active Management Mechanism</h3>
+          <p class="body-text" style="margin-top: 0.5rem;">
+            In contrast to passive memory accumulation, HiMe introduces explicit operations granting the robot <em>knowledge plasticity</em>:
+          </p>
+          <div class="arch-chip-row" style="margin-top: 0.85rem;">
+            <span class="arch-chip op-add">Add — insert new facts or user preferences</span>
+            <span class="arch-chip op-update">Update — revise outdated entries</span>
+            <span class="arch-chip op-delete">Delete — remove stale or conflicting data</span>
+          </div>
+        </div>
+
+        <div style="margin-top: 1.75rem;">
+          <h3>Implementation Details</h3>
+          <p class="body-text" style="margin-top: 0.5rem;">
+            The framework is model-agnostic. Only the Executor requires domain-specific training; Sentry and Planner operate fully zero-shot, leveraging pre-trained generalization.
+          </p>
+          <div class="impl-table-wrap">
+            <table class="info-table">
+              <thead>
+                <tr>
+                  <th>Component</th>
+                  <th>Model</th>
+                  <th>Mode</th>
+                  <th>Details</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Executor (π<sub>e</sub>)</td>
+                  <td>π₀.₅ (VLA)</td>
+                  <td>Fine-tuned</td>
+                  <td>160 H100 GPU hrs · 30k steps · AdamW · cosine LR · batch 256</td>
+                </tr>
+                <tr>
+                  <td>Sentry (π<sub>s</sub>)</td>
+                  <td>Qwen3-VL-8B</td>
+                  <td>Zero-shot</td>
+                  <td>Sliding window h<sub>s</sub> = 8 frames · monitor interval n<sub>m</sub> = 5 steps</td>
+                </tr>
+                <tr>
+                  <td>Planner (π<sub>p</sub>)</td>
+                  <td>GPT-4o</td>
+                  <td>Zero-shot</td>
+                  <td>Two-turn CRUD protocol · invoked at subtask junctions only</td>
+                </tr>
+                <tr>
+                  <td>Memory Backend</td>
+                  <td>text-embedding-3</td>
+                  <td>—</td>
+                  <td>Vector DB · cosine similarity retrieval · unbounded capacity</td>
+                </tr>
+                <tr>
+                  <td>Robot Platform</td>
+                  <td>WidowX-250s</td>
+                  <td>—</td>
+                  <td>Parallel gripper · dual camera (wrist + third-person) · 2 Hz control</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="chart-card chart-card-half" style="margin-top: 1.75rem;">
+          <canvas id="chartManagement" aria-label="Memory management ablation"></canvas>
+        </div>
+        <p class="fig-caption">Ablation of memory management strategy across three tasks. Active management (HiMe) consistently outperforms FIFO and No-Management baselines.</p>
+      </section>
+
+      <!-- Tasks -->
+      <section class="paper-section reveal" id="tasks">
+        <h2>Tasks</h2>
+
+        <p class="section-note">
+          Three challenging tabletop manipulation scenarios designed to evaluate diverse long-horizon capabilities — preference recall, counting with constraints, and spatially-aware rearrangement.
+        </p>
+
+        <div class="body-text">
+          <img
+            src="./VL_Memory/imgs/hime_exp3.png"
+            alt="Tasks used in evaluation"
+            class="fig-img"
+          />
+          <p class="fig-caption">Tasks used in evaluation. Performance is reported across 20 trials per task per method.</p>
+        </div>
+
+        <div class="feature-grid" style="margin-top: 1.75rem;">
+          <div class="feature-item">
+            <p class="feature-label">Task 1</p>
+            <p class="feature-value">Object Search</p>
+            <p class="feature-desc">Inspect opaque boxes to deduce storage rules, sort scattered items, and handle dynamic user updates to memory. Finally, synthesize memorized preferences to retrieve the correct object.</p>
+          </div>
+          <div class="feature-item">
+            <p class="feature-label">Task 2</p>
+            <p class="feature-value">Counting</p>
+            <p class="feature-desc">Interpret a visual recipe on the table, prepare ingredients by serving count, then integrate a late-arriving user preference to dispense the correct personalized output.</p>
+          </div>
+          <div class="feature-item">
+            <p class="feature-label">Task 3</p>
+            <p class="feature-value">Rearrangement</p>
+            <p class="feature-desc">Collect all toys into a storage box, then restore them to their original positions while applying a pre-stated user preference over placement — requiring recall of both spatial configuration and human intent.</p>
+          </div>
+        </div>
+
+        <div class="body-text" style="margin-top: 1.75rem;">
+          <img
+            src="./VL_Memory/imgs/setting.png"
+            alt="Evaluation setup: WidowX-250s arm"
+            class="fig-img"
+          />
+          <p class="fig-caption">Physical setup: WidowX-250s arm, parallel gripper, third-person + wrist dual-camera input.</p>
+        </div>
+      </section>
+
+      <!-- Results -->
+      <section class="paper-section reveal" id="results">
+        <h2>Results</h2>
+
+        <p class="section-note">
+          HiMe significantly outperforms all flat-memory baselines, achieving a <strong>90% average success rate</strong> — effectively bridging the gap to the human-oracle upper bound.
+        </p>
+
+        <div style="margin-top: 1.25rem;">
+          <h3>Baselines</h3>
+          <p class="body-text" style="margin-top: 0.5rem;">
+            All methods share the same Executor (π₀.₅). Only the memory context and planning trigger differ — isolating the contribution of hierarchical memory from other variables.
+          </p>
+          <div class="impl-table-wrap" style="margin-top: 0.75rem;">
+            <table class="info-table">
+              <thead>
+                <tr>
+                  <th>Method</th>
+                  <th>Planner Trigger</th>
+                  <th>Planner Memory</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Transient Memory</td>
+                  <td>Periodic (fixed interval)</td>
+                  <td>Current frame only</td>
+                </tr>
+                <tr>
+                  <td>Transient Memory w/ Sentry</td>
+                  <td>Sentry-triggered</td>
+                  <td>Current frame only</td>
+                </tr>
+                <tr>
+                  <td>Flat Memory</td>
+                  <td>Periodic (fixed interval)</td>
+                  <td>Recent 8 frames + FIFO keyframe queue</td>
+                </tr>
+                <tr>
+                  <td>HiMe w/o Sentry</td>
+                  <td>Periodic (fixed interval)</td>
+                  <td>Recent frames + structured keyframes</td>
+                </tr>
+                <tr class="row-hime">
+                  <td>HiMe (Ours)</td>
+                  <td>Sentry-triggered</td>
+                  <td>Recent frames + structured keyframes</td>
+                </tr>
+                <tr>
+                  <td>Human High-level</td>
+                  <td>Sentry-triggered</td>
+                  <td>Human oracle</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="chart-card" style="margin-top: 1.75rem;">
+          <canvas id="chartMain" aria-label="Main results bar chart"></canvas>
+        </div>
+        <p class="fig-caption">
+          <strong>Main Results.</strong> HiMe compared against all baselines across three long-horizon tasks. HiMe achieves a <strong>90% average success rate</strong>, bridging the gap to the Human High-level oracle.
+        </p>
+
+        <div class="fact-grid" style="margin-top: 1.5rem;">
+          <div class="fact-item">
+            <strong>+12 pp from Sentry alone:</strong> Transient Memory 14% → 26% — temporal consistency prevents erratic subtask switching.
+          </div>
+          <div class="fact-item">
+            <strong>+64 pp from hierarchy:</strong> 26% (Transient+Sentry) → 90% (HiMe) via structured retrieval and active management.
+          </div>
+          <div class="fact-item">
+            <strong>+22 pp from Sentry quality:</strong> HiMe w/o Sentry 68% → HiMe 90% — consolidated working memory reduces hallucinations.
+          </div>
+          <div class="fact-item">
+            <strong>Self-correction:</strong> HiMe uniquely updates its knowledge base when user preferences conflict or evolve mid-task.
+          </div>
+        </div>
+
+        <div style="margin-top: 1.75rem;">
+          <h3>Analysis</h3>
+          <p class="body-text" style="margin-top: 0.75rem;">
+            <strong>Sentry — temporal consistency.</strong> Without the Sentry, the Planner re-evaluates every frame, making the agent hypersensitive to transient visual noise and causing erratic subtask switching. The Sentry acts as a temporal lock — it prevents replanning until the current subtask is confirmed complete, boosting performance from <strong>14% → 26%</strong> even with no memory.
+          </p>
+          <p class="body-text" style="margin-top: 0.85rem;">
+            <strong>Sentry — conservative nature.</strong> High Precision (~82%) but low Recall (~35%) reveals the Sentry's bias toward the incomplete state — it continues execution unless overwhelmingly confident. To avoid infinite loops from missed "Done" signals, a <strong>fixed-interval Planner fallback</strong> is added as a safety net, ensuring eventual progress regardless.
+          </p>
+          <p class="body-text" style="margin-top: 0.85rem;">
+            <strong>Memory — flat vs. hierarchical.</strong> Flat Memory (FIFO context) achieves only <strong>65%</strong> vs. HiMe's <strong>90%</strong>. A FIFO queue cannot distinguish critical frames from noise — as the episode grows, the context window floods with redundant observations, silently evicting earlier key information that is critical for later reasoning.
+          </p>
+          <p class="body-text" style="margin-top: 0.85rem;">
+            <strong>Memory — active management.</strong> No-Management (append-only) reaches <strong>86%</strong> but falls short of HiMe's <strong>90%</strong>. Without <em>Update</em>/<em>Delete</em>, memory accumulates obsolete states alongside current ones, introducing contradictions that confuse the Planner during retrieval.
+          </p>
+        </div>
+
+        <div style="margin-top: 1.75rem;">
+          <h3>Memory Modality Ablation</h3>
+          <p class="body-text" style="margin-top: 0.75rem;">
+            Robotic tasks impose heterogeneous memory demands that no single modality can satisfy. Spatial localization and fine-grained recognition favor visual memory — in Object Search, image-only (<strong>86%</strong>) substantially outperforms text-only (<strong>74%</strong>), because text is a lossy compression that discards spatial context and prevents visual re-grounding when initial perception fails. Conversely, abstract reasoning favors text — in Counting, text-only (<strong>91%</strong>) outperforms image-only (<strong>78%</strong>), since symbolic rules and user preferences are hard to recover from pixels on demand. Cross-modal memory combines both strengths and achieves the best performance across all tasks (avg. <strong>90%</strong>).
+          </p>
+          <div class="chart-card chart-card-half" style="margin-top: 1rem;">
+            <canvas id="chartModality" aria-label="Modality ablation"></canvas>
+          </div>
+          <p class="fig-caption">Ablation of memory modality. Cross-modal (image + text) outperforms unimodal baselines across all tasks.</p>
+        </div>
+
+        <div style="margin-top: 1.75rem;">
+          <h3>Sentry Working Memory Window</h3>
+          <p class="body-text" style="margin-top: 0.75rem;">
+            Increasing the Sentry's working memory window from 1 to 8 frames consistently improves both Precision (76% → 82%) and Recall (22% → 35%). A single frame often lacks sufficient temporal context to distinguish a momentary pause from genuine subtask completion. With 8 frames, the Sentry can leverage sequential cues to make more reliable judgments. The persistent gap between high Precision and low Recall reflects the Sentry's inherent conservative bias — it prefers to continue execution rather than risk a premature handover, which minimises false completions at the cost of occasionally missing the true transition signal.
+          </p>
+          <div class="chart-card chart-card-half" style="margin-top: 1rem;">
+            <canvas id="chartSentry" aria-label="Sentry window precision and recall"></canvas>
+          </div>
+          <p class="fig-caption">Sentry precision &amp; recall vs. working-memory window size (N = 1–8 frames). Larger windows improve both metrics.</p>
+        </div>
+
+        <div style="margin-top: 1.75rem;">
+          <h3>Efficiency Analysis</h3>
+          <p class="body-text" style="margin-top: 0.5rem;">
+            The Sentry reduces Planner invocations by <strong>~3×</strong> by shifting from step-by-step to subtask-level calls. Combined with infinite structured memory, HiMe achieves a <strong>94% Memory Hit rate</strong> — virtually eliminating redundant re-exploration caused by forgotten context.
+          </p>
+          <div class="impl-table-wrap" style="margin-top: 0.85rem;">
+            <table class="info-table">
+              <thead>
+                <tr>
+                  <th rowspan="2" style="vertical-align:bottom;">Method</th>
+                  <th colspan="3" style="text-align:center; border-bottom:1px solid var(--border);">Object Search</th>
+                  <th colspan="3" style="text-align:center; border-bottom:1px solid var(--border);">Counting</th>
+                  <th colspan="3" style="text-align:center; border-bottom:1px solid var(--border);">Rearrangement</th>
+                </tr>
+                <tr>
+                  <th>API ↓</th><th>Mem Hit ↑</th><th>Score ↑</th>
+                  <th>API ↓</th><th>Mem Hit ↑</th><th>Score ↑</th>
+                  <th>API ↓</th><th>Mem Hit ↑</th><th>Score ↑</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr class="row-hime">
+                  <td>HiMe (Ours)</td>
+                  <td class="num best">1.8</td><td class="num best">94%</td><td class="num best">92%</td>
+                  <td class="num best">2.6</td><td class="num best">98%</td><td class="num best">92%</td>
+                  <td class="num best">1.4</td><td class="num best">92%</td><td class="num best">87%</td>
+                </tr>
+                <tr>
+                  <td>Flat Memory</td>
+                  <td class="num">5.4</td><td class="num">68%</td><td class="num">64%</td>
+                  <td class="num">4.8</td><td class="num">61%</td><td class="num">58%</td>
+                  <td class="num">6.2</td><td class="num">76%</td><td class="num">73%</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p class="fig-caption" style="margin-top:0.6rem;">API Call = average Planner requests per subtask. Memory Hit = fraction of memory-dependent subtasks where required context was present.</p>
+        </div>
+      </section>
+    </main>
+
+    <!-- Footer -->
+    <footer class="site-footer">
+      <div class="footer-inner">
+        <p>© 2026 Li Ji, Siyin Wang et al. · Fudan University · Shanghai Innovation Institute</p>
+        <nav class="footer-links" aria-label="Footer">
+          <a href="./VL_Memory/example_paper.pdf" target="_blank" rel="noopener">Paper</a>
+        </nav>
+      </div>
+    </footer>
+
+    <script src="./script.js"></script>
+  </body>
+</html>
