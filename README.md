@@ -12,7 +12,6 @@ We thank the Nerfies authors for releasing the template.
 - `styles.css`
 - `script.js`
 - `serve.py`
-- `HiMe/example_paper.pdf`
 - `HiMe/imgs/intro.png`
 - `HiMe/imgs/hime.png`
 - `HiMe/imgs/hime_exp3.png`

@@ -210,6 +210,13 @@ strong { font-weight: 600; }
   background: rgba(44, 37, 30, 0.04);
 }
 
+.btn-disabled {
+  background: rgba(44, 37, 30, 0.06);
+  color: var(--text-2);
+  border-color: var(--border);
+  cursor: default;
+}
+
 .btn-sm {
   padding: 0.45rem 0.9rem;
   font-size: 0.75rem;
