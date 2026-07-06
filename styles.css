@@ -513,6 +513,74 @@ h3 {
   text-align: center;
 }
 
+/* ─── Demo videos ────────────────────────────────────────── */
+.demo-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1rem;
+}
+
+.demo-card {
+  overflow: hidden;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.demo-video {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background: #111;
+  border-bottom: 1px solid var(--border);
+}
+
+.demo-controls {
+  display: flex;
+  gap: 0.45rem;
+  padding: 0.65rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  background: rgba(44, 37, 30, 0.025);
+}
+
+.demo-speed {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.demo-control {
+  min-width: 4rem;
+  padding: 0.42rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-card);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  cursor: pointer;
+  transition: border-color 140ms, background 140ms;
+}
+
+.demo-control:hover {
+  border-color: var(--text);
+  background: rgba(44, 37, 30, 0.04);
+}
+
+.demo-control.is-active {
+  background: var(--btn-bg);
+  border-color: var(--btn-bg);
+  color: #fff;
+}
+
+.demo-copy {
+  padding: 1rem 1.1rem 1.1rem;
+}
+
+.demo-copy h3 {
+  margin-bottom: 0.35rem;
+}
+
 /* ─── Reveal animation ───────────────────────────────────── */
 .reveal {
   opacity: 0;

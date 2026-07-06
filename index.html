@@ -9,14 +9,9 @@
     />
     <meta name="theme-color" content="#f7f5f0" />
     <title>HiMe | Hierarchical Embodied Memory</title>
+    <link rel="stylesheet" href="./HiMe/vendor/fonts/google-fonts.css" />
     <link rel="stylesheet" href="./styles.css" />
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap"
-      rel="stylesheet"
-    />
+    <script src="./HiMe/vendor/chart.umd.min.js"></script>
   </head>
   <body>
     <!-- Desktop left sidebar -->
@@ -31,6 +26,7 @@
           <a class="sidebar-link" href="#introduction">Introduction</a>
           <a class="sidebar-link" href="#method">Method</a>
           <a class="sidebar-link" href="#tasks">Tasks</a>
+          <a class="sidebar-link" href="#demo">Demo</a>
           <a class="sidebar-link" href="#results">Results</a>
         </div>
       </div>
@@ -40,7 +36,7 @@
     <header class="mobile-header">
       <span class="mobile-brand">HiMe</span>
       <div class="mobile-actions">
-        <a class="btn btn-dark btn-sm" href="./VL_Memory/example_paper.pdf" target="_blank" rel="noopener">Paper ↗</a>
+        <a class="btn btn-dark btn-sm" href="./HiMe/example_paper.pdf" target="_blank" rel="noopener">Paper ↗</a>
       </div>
     </header>
 
@@ -83,7 +79,7 @@
         <div class="paper-actions">
           <a
             class="btn btn-dark"
-            href="./VL_Memory/example_paper.pdf"
+            href="./HiMe/example_paper.pdf"
             target="_blank"
             rel="noopener"
           >Paper ↗</a>
@@ -119,7 +115,7 @@
 
         <div class="body-text">
           <img
-            src="./VL_Memory/imgs/intro.png"
+            src="./HiMe/imgs/intro.png"
             alt="Overview of HiMe"
             class="fig-img"
           />
@@ -173,7 +169,7 @@
 
         <div class="body-text" style="margin-top: 1.75rem;">
           <img
-            src="./VL_Memory/imgs/hime.png"
+            src="./HiMe/imgs/hime.png"
             alt="Architecture of HiMe"
             class="fig-img"
           />
@@ -278,7 +274,7 @@
 
         <div class="body-text">
           <img
-            src="./VL_Memory/imgs/hime_exp3.png"
+            src="./HiMe/imgs/hime_exp3.png"
             alt="Tasks used in evaluation"
             class="fig-img"
           />
@@ -305,11 +301,79 @@
 
         <div class="body-text" style="margin-top: 1.75rem;">
           <img
-            src="./VL_Memory/imgs/setting.png"
+            src="./HiMe/imgs/setting.png"
             alt="Evaluation setup: WidowX-250s arm"
             class="fig-img"
           />
           <p class="fig-caption">Physical setup: WidowX-250s arm, parallel gripper, third-person + wrist dual-camera input.</p>
+        </div>
+      </section>
+
+      <!-- Demo -->
+      <section class="paper-section reveal" id="demo">
+        <h2>Demo</h2>
+
+        <p class="section-note">
+          Representative robot rollouts across the three long-horizon tasks.
+        </p>
+
+        <div class="demo-grid">
+          <article class="demo-card">
+            <video class="demo-video" controls preload="auto" playsinline>
+              <source src="./HiMe/videos/search-0706.mp4" type="video/mp4" />
+            </video>
+            <div class="demo-controls" aria-label="Object Search video controls">
+              <div class="demo-speed" aria-label="Object Search playback speed">
+                <button class="demo-control is-active" type="button" data-video-speed="1">1x</button>
+                <button class="demo-control" type="button" data-video-speed="2">2x</button>
+              </div>
+            </div>
+            <div class="demo-copy">
+              <p class="feature-label">Demo 1</p>
+              <h3>Object Search</h3>
+              <p class="feature-desc">
+                The robot inspects the scene, tracks task-relevant memory, and retrieves the target object after integrating updated context.
+              </p>
+            </div>
+          </article>
+
+          <article class="demo-card">
+            <video class="demo-video" controls preload="auto" playsinline>
+              <source src="./HiMe/videos/counting-0706.mp4" type="video/mp4" />
+            </video>
+            <div class="demo-controls" aria-label="Counting video controls">
+              <div class="demo-speed" aria-label="Counting playback speed">
+                <button class="demo-control is-active" type="button" data-video-speed="1">1x</button>
+                <button class="demo-control" type="button" data-video-speed="2">2x</button>
+              </div>
+            </div>
+            <div class="demo-copy">
+              <p class="feature-label">Demo 2</p>
+              <h3>Counting</h3>
+              <p class="feature-desc">
+                The robot reads a visual recipe, maintains progress across repeated actions, and adjusts the final output according to user preference.
+              </p>
+            </div>
+          </article>
+
+          <article class="demo-card">
+            <video class="demo-video" controls preload="auto" playsinline>
+              <source src="./HiMe/videos/rearrangement-0706.mp4" type="video/mp4" />
+            </video>
+            <div class="demo-controls" aria-label="Rearrangement video controls">
+              <div class="demo-speed" aria-label="Rearrangement playback speed">
+                <button class="demo-control is-active" type="button" data-video-speed="1">1x</button>
+                <button class="demo-control" type="button" data-video-speed="2">2x</button>
+              </div>
+            </div>
+            <div class="demo-copy">
+              <p class="feature-label">Demo 3</p>
+              <h3>Rearrangement</h3>
+              <p class="feature-desc">
+                The robot clears the workspace, preserves spatial memory, and restores objects while respecting the stated placement preference.
+              </p>
+            </div>
+          </article>
         </div>
       </section>
 
@@ -477,7 +541,7 @@
       <div class="footer-inner">
         <p>© 2026 Li Ji, Siyin Wang et al. · Fudan University · Shanghai Innovation Institute</p>
         <nav class="footer-links" aria-label="Footer">
-          <a href="./VL_Memory/example_paper.pdf" target="_blank" rel="noopener">Paper</a>
+          <a href="./HiMe/example_paper.pdf" target="_blank" rel="noopener">Paper</a>
         </nav>
       </div>
     </footer>

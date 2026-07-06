@@ -286,3 +286,18 @@ const navObserver = new IntersectionObserver(
 );
 
 sections.forEach((section) => navObserver.observe(section));
+
+/* ─── Demo Video Controls ────────────────────────────────── */
+document.querySelectorAll('.demo-card').forEach((card) => {
+  const video = card.querySelector('video');
+  const speedButtons = card.querySelectorAll('[data-video-speed]');
+
+  speedButtons.forEach((button) => {
+    button.addEventListener('click', () => {
+      video.playbackRate = Number(button.dataset.videoSpeed);
+      speedButtons.forEach((item) => {
+        item.classList.toggle('is-active', item === button);
+      });
+    });
+  });
+});
