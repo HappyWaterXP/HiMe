@@ -6,16 +6,16 @@
 </div>
 </div>
 
-<!-- <div>
+<div>
 <br>
 
 <div align="center">
 
-[**📖Paper**](<PAPER_URL>) |
-[**🌐Project Page**](<PROJECT_PAGE_URL>) |
+[**🌐Webpage**](https://happywaterxp.github.io/HiMe/) |
+**📖arXiv**: To be released
 
 </div>
-</div> -->
+</div>
 
 <strong>HiMe</strong> is a hierarchical embodied memory framework for long-horizon vision-language-action control. It is designed for robotic tasks that depend on current observations, task progress, historical context, and evolving user instructions.
 
