@@ -248,21 +248,12 @@ strong { font-weight: 600; }
 
 h1 {
   font-family: var(--font-body);
-  font-size: clamp(26px, 4vw, 42px);
+  font-size: clamp(24px, 3.4vw, 38px);
   font-weight: 500;
   color: var(--text);
   letter-spacing: -0.02em;
   line-height: 1.15;
   margin-bottom: 0.85rem;
-}
-
-.paper-subtitle {
-  font-size: 1rem;
-  color: var(--text);
-  opacity: 0.8;
-  max-width: 46rem;
-  margin: 0 auto 1.25rem;
-  line-height: 1.7;
 }
 
 .authors-block {
