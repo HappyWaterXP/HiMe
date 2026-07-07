@@ -1,9 +1,6 @@
 <div align="center">
 
-# HiMe
-<div>
-   🧠 Hierarchical Embodied Memory for Long-Horizon Vision-Language-Action Control 🚀
-</div>
+# HiMe: Hierarchical Embodied Memory for Long-Horizon Vision-Language-Action Control
 </div>
 
 <div>
