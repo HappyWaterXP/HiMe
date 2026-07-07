@@ -12,7 +12,7 @@
 <div align="center">
 
 [**🌐Webpage**](https://happywaterxp.github.io/HiMe/) |
-**📖arXiv**: To be released
+[**📖arXiv**](https://arxiv.org/abs/2607.03449)
 
 </div>
 </div>
